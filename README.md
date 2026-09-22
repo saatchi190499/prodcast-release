@@ -1,42 +1,40 @@
 # ProdCast releases
 
-Download packaged ProdCast App releases from the [Releases page](https://github.com/saatchi190499/prodcast-release/releases).
+Готовые дистрибутивы ProdCast. Исходный код приложений и история их сборки хранятся в отдельных репозиториях; здесь публикуются runtime-пакеты, инструкции и сведения о проверках.
 
-This repository contains customer distribution information. Application source
-code and build history are maintained separately in private repositories.
+## Полный комплект v0.2
 
-## Installation
+[**ProdCast 0.2 — Production**](https://github.com/saatchi190499/prodcast-release/releases/tag/v0.2) содержит **App, Agent, AI, License и Windows Worker**:
 
-Choose a release and download its `prodcast-app-<VERSION>-deployment.tar.gz`
-package. Extract it and follow `runtime/INSTALL-RU.md` for installation,
-configuration, upgrade and rollback instructions.
+| Компоненты | Исходная версия |
+|---|---|
+| App и Agent — та же пара, что в v0.1 | `v2026.9.19-rc.1` |
+| AI, License, Worker | `v2026.9.17-rc.1` |
 
-- Online installation uses the exact Docker image digests recorded in
-  `packages.env` and `images.json`.
-- Offline installation additionally requires the matching Docker image archives
-  attached to that release; follow its installation instructions.
-- Use `SHA256SUMS` to verify the downloaded release files before installation.
-- Create your own runtime secrets and TLS configuration. Example settings are
-  templates, not customer credentials.
+Скачать `ProdCast-v0.2-complete.zip` и `.zip.sha256`, проверить хеш, распаковать и проверить вложенный `SHA256SUMS`. Все приложения также доступны отдельными assets. Сборка из исходников для установки не требуется.
 
-GitHub Container Registry access is configured separately from this repository.
-If an image requires authentication, obtain read access from your distributor.
-Never use a release-publishing token on a customer deployment.
+- [Пошаговое руководство по серверам](docs/v0.2/README.md).
+- [С чего начать](releases/v0.2/INSTALL-RU.md).
+- [Изменения и границы production validation](releases/v0.2/RELEASE-NOTES.md).
+- [Манифест компонентов и контрольных сумм](releases/v0.2/release-manifest.json).
+- [Подробный отчёт проверок](releases/v0.2/production-validation.json).
 
-## Release automation
+Бинарно идентичный комплект прошёл функциональную проверку на существующей production-площадке 21.09.2026. Новый дистрибутив проверен по целостности, происхождению и зависимостям. Новая чистая площадка, полностью автономная инфраструктура, нагрузка и полный upgrade/rollback требуют отдельной приёмки. Известное замечание upstream CI Worker описано в отчёте; исходные RC-теги/манифесты не переписаны.
 
-The private App build workflow tests and packages a version, publishes its
-Docker images, and uploads the finished release assets here. No application
-source branch or source Git history is copied into this repository.
+## Установка и инфраструктура
 
-Versions ending in `-rc.N` are release candidates. Read each release's
-installation notes and acceptance status before deployment. Other ProdCast
-components may require separate compatible packages.
+Инструкции включают DB, AI, App/License, два Windows Worker и клиентский Agent: конфигурации, TLS, роли, секреты, запуск, проверки, резервное копирование и откат. Примеры адресов обезличены: заменить их параметрами площадки перед установкой.
 
-GitHub's automatic **Source code (zip)** and **Source code (tar.gz)** downloads
-contain only the files committed to this distribution repository. Use the
-deployment packages under release assets to install ProdCast.
+Linux images входят в поставку и загружаются через `docker load`; `packages.offline.env` сохраняет исходные transport tags. При установке через registry используются digest references в `packages.env`; доступ GHCR при необходимости предоставляется отдельно. Не использовать publishing token для развёртывания.
 
-The distributed backend includes compiled Python bytecode, which can be
-reverse-engineered. Browser JavaScript and open-source integration plugins are
-inspectable; this distribution is not an encryption mechanism.
+ОС, Docker/Compose, PostgreSQL/Redis, GPU driver, Ollama/model, DNS/TLS и уникальные секреты готовятся отдельно. Полный ZIP включает все пять приложений ProdCast, но не все сторонние инфраструктурные зависимости. Ни приватные ключи, ни данные/пароли действующей площадки не распространяются.
+
+Agent installer не имеет Authenticode-подписи; проверить SHA256 и правила допуска ПО своей организации. Windows Worker включает Python 3.14.7 x64 installer с подписью Python Software Foundation и offline wheelhouse.
+
+## Предыдущие версии и содержимое репозитория
+
+[v0.1](https://github.com/saatchi190499/prodcast-release/releases/tag/v0.1) остаётся доступным без изменений и содержит App/Agent. Версии `-rc.N` обозначают исходные release candidates. Во v0.2 прикладные бинарные файлы не пересобирались; обновлён состав общего дистрибутива и документация.
+
+Автоматические GitHub **Source code (zip/tar.gz)** содержат только файлы этого distribution-репозитория. Для установки использовать release assets.
+
+Core Python поставляется в bytecode, который допускает восстановление кода. Браузерный JavaScript и open-source integration plugins доступны для анализа; формат дистрибутива не является механизмом шифрования исходников.

@@ -1,0 +1,435 @@
+{
+  "schema_version": 2,
+  "version": "v0.2",
+  "repository": "saatchi190499/prodcast-release",
+  "status": "stable",
+  "channel": "production",
+  "created_utc": "2026-09-22T07:44:14.819371+00:00",
+  "binaries_rebuilt": false,
+  "credentials_included": false,
+  "components": [
+    {
+      "component": "app",
+      "repository": "saatchi190499/prodcast-app",
+      "upstream_tag": "v2026.9.19-rc.1",
+      "source_commit": "e523b7fff298682d27eb27bda883a09f2558ed23",
+      "upstream_release_url": "https://github.com/saatchi190499/prodcast-app/releases/tag/v2026.9.19-rc.1",
+      "original_production_accepted": false,
+      "assets": [
+        {
+          "name": "images.json",
+          "sha256": "6f893650cb9cdc7b3005be49ca0f2881976475390799f0613547e60d3fa3d33f",
+          "bytes": 1122
+        },
+        {
+          "name": "packages.env",
+          "sha256": "ab45bbe5c48f6371ff08d88596dfc612cc9f60a18dc9d924ba3244b7a3467d12",
+          "bytes": 404
+        },
+        {
+          "name": "prodcast-app-v2026.9.19-rc.1-deployment.tar.gz",
+          "sha256": "c1f118a85a7da98cd706002d7afa09eb260f57906207127c4a2242af78864729",
+          "bytes": 6680
+        },
+        {
+          "name": "prodcast-backend-dependencies.json",
+          "sha256": "7b41c86b4a84ac642b7cb0e7ad15f8ba118ae0c28946fe6f389904fc621082e0",
+          "bytes": 3550
+        },
+        {
+          "name": "prodcast-backend-v2026.9.19-rc.1-linux-amd64.tar.gz",
+          "sha256": "6a69586e53b801c561187adb8f8f1667908b9b7de12210edd4b00789e2e9a1a1",
+          "bytes": 223416474
+        },
+        {
+          "name": "prodcast-frontend-v2026.9.19-rc.1-linux-amd64.tar.gz",
+          "sha256": "98162787f7ccc65cc917a21d8263988d14bdd6e27a3ed5a3f1db3476c0aec492",
+          "bytes": 34426192
+        },
+        {
+          "name": "prodcast-gateway-v2026.9.19-rc.1-linux-amd64.tar.gz",
+          "sha256": "f60d06a3a0077c8decb1ffe61d4f4a963c058cc761a53a2649e8280b80f02a1a",
+          "bytes": 27503351
+        },
+        {
+          "name": "release-manifest.json",
+          "sha256": "d8c2a7521b2b572e96c528c291cc6f56e89348efad0a1363a4fb21c6066d1053",
+          "bytes": 1911
+        },
+        {
+          "name": "SHA256SUMS",
+          "sha256": "fc3c6566ec1440ae2e20c01ea11866ab03ff1e89f5a701e05f430ec2ef2b6f8f",
+          "bytes": 814
+        }
+      ],
+      "images": [
+        {
+          "name": "prodcast-backend",
+          "reference": "ghcr.io/saatchi190499/prodcast-backend@sha256:4a57f585d5172e80ab01be371c012e057f6a776fedb9344cb06fd08da4637ef9",
+          "transport_tag": "ghcr.io/saatchi190499/prodcast-backend:v2026.9.19-rc.1",
+          "image_id": "sha256:a2d88731bb0cd666539046da1ff67cdb8e549bfa9ef12653e4a1323b6de2d893",
+          "platform": "linux/amd64"
+        },
+        {
+          "name": "prodcast-frontend",
+          "reference": "ghcr.io/saatchi190499/prodcast-frontend@sha256:271dc10efc0b1ece2a36fe82109dd1a773648cf2277660eee8394c2806b6006c",
+          "transport_tag": "ghcr.io/saatchi190499/prodcast-frontend:v2026.9.19-rc.1",
+          "image_id": "sha256:44b9f44086c4b394a9f239527700268d7e0ecc1c8ab237b938bd32ebe5563ad1",
+          "platform": "linux/amd64"
+        },
+        {
+          "name": "prodcast-gateway",
+          "reference": "ghcr.io/saatchi190499/prodcast-gateway@sha256:d2549479b81e25d9411edfb9bb4d0b811e167f8a2baffe7ae0d2212ba4a14f9b",
+          "transport_tag": "ghcr.io/saatchi190499/prodcast-gateway:v2026.9.19-rc.1",
+          "image_id": "sha256:c548c7dade4eef78732657fcf1c39716631b9f6914becc8f8f077949aed6ed3c",
+          "platform": "linux/amd64"
+        }
+      ]
+    },
+    {
+      "component": "agent",
+      "repository": "saatchi190499/prodcast-agent",
+      "upstream_tag": "v2026.9.19-rc.1",
+      "source_commit": "e55b494d96516fba8b6cc015adfac6e63596165f",
+      "upstream_release_url": "https://github.com/saatchi190499/prodcast-agent/releases/tag/v2026.9.19-rc.1",
+      "original_production_accepted": false,
+      "assets": [
+        {
+          "name": "INSTALL-RU.md",
+          "sha256": "c4ab6f821d1a96db39d8358cf733fd379195b8d61d3e6de7db6170dd5b23c5a0",
+          "bytes": 497
+        },
+        {
+          "name": "ProdCastAgent-Setup-v2026.9.19-rc.1.exe",
+          "sha256": "36b2c34bfece02f770d17736eeaabadc10fedcc3c8087f65b2a6e299089965b2",
+          "bytes": 67392193
+        },
+        {
+          "name": "release-manifest.json",
+          "sha256": "f5c11f794b244c9faa30b2a99a32946ca1e16986b5f9be4a8e0a434d0f5181d0",
+          "bytes": 1147
+        },
+        {
+          "name": "SHA256SUMS",
+          "sha256": "99ec912bd33cac1f49e46e345ced91b64054ba16ac06683a7e09c5b02520d21b",
+          "bytes": 373
+        },
+        {
+          "name": "workflow-agent-sbom.cdx.json",
+          "sha256": "974acc29de5c71b7b76848ff402d4450dead246b25f935fdcd63f393d1f916c5",
+          "bytes": 88345
+        }
+      ]
+    },
+    {
+      "component": "ai",
+      "repository": "saatchi190499/prodcast-ai",
+      "upstream_tag": "v2026.9.17-rc.1",
+      "source_commit": "6a288d98398f34ea42553f70b4a363747c5a1b93",
+      "upstream_release_url": "https://github.com/saatchi190499/prodcast-ai/releases/tag/v2026.9.17-rc.1",
+      "original_production_accepted": false,
+      "assets": [
+        {
+          "name": "images.json",
+          "sha256": "ce502867b2fc96225b95fb9c8ddf90e837cd3d347434e3a00aa38ddbdc8b6e6c",
+          "bytes": 360
+        },
+        {
+          "name": "packages.env",
+          "sha256": "85ad0b31a6bd25a4dbf78a41febacaabf25a898f63b8e7fac3c865f4090866db",
+          "bytes": 124
+        },
+        {
+          "name": "prodcast-ai-dependencies.json",
+          "sha256": "1bae8a741a5bc97efb79c02824975cb56876e445f7e629ca27cab4af9c9ad052",
+          "bytes": 2561
+        },
+        {
+          "name": "prodcast-ai-v2026.9.17-rc.1-deployment.tar.gz",
+          "sha256": "12a06dbd363bda52c3ca59cae544fdf4fde2446721c86f7a8eac7bd3a284b88a",
+          "bytes": 3787
+        },
+        {
+          "name": "prodcast-ai-v2026.9.17-rc.1-linux-amd64.tar.gz",
+          "sha256": "9d6517d8e2e55bb2434c4fb2f7136bcda09f542166944dedbd355ad90fab6777",
+          "bytes": 87387455
+        },
+        {
+          "name": "release-manifest.json",
+          "sha256": "82463f41c7d655731f0baa75208a33567caf1e9dfdcf9407fd70ea2c0af8ae76",
+          "bytes": 1440
+        },
+        {
+          "name": "SHA256SUMS",
+          "sha256": "e4982122c399cb55d0a4cf2b1b833592725f509cfca9836f7a59d67cecab2899",
+          "bytes": 566
+        }
+      ],
+      "images": [
+        {
+          "name": "prodcast-ai",
+          "reference": "ghcr.io/saatchi190499/prodcast-ai@sha256:5f022983dd8975d7ccb64a4d3f081aa5543b8c8914f716634a99fae77780ab1d",
+          "transport_tag": "ghcr.io/saatchi190499/prodcast-ai:v2026.9.17-rc.1",
+          "image_id": "sha256:b116dd5c13b7b66d332a65a2365f77e7c04c8f4b56c611931d0aa8e9eaab7e8f",
+          "platform": "linux/amd64"
+        }
+      ]
+    },
+    {
+      "component": "license",
+      "repository": "saatchi190499/prodcast-license",
+      "upstream_tag": "v2026.9.17-rc.1",
+      "source_commit": "0df0ab14c9b6dc9a29611784b4d5f9be856a5e8b",
+      "upstream_release_url": "https://github.com/saatchi190499/prodcast-license/releases/tag/v2026.9.17-rc.1",
+      "original_production_accepted": false,
+      "assets": [
+        {
+          "name": "images.json",
+          "sha256": "82870f0ab5b5e82dc177454a3f6e6083dc94121716a8178e7f4d51f1e79e8e79",
+          "bytes": 375
+        },
+        {
+          "name": "packages.env",
+          "sha256": "2a5309d46470e211fcc275169445431dae4441f4703ef7e117ead5dc877e5ecb",
+          "bytes": 134
+        },
+        {
+          "name": "prodcast-license-dependencies.json",
+          "sha256": "07aaf8168fd7c1c75fd4b6f8ac1af89f67ba5a39743152e3ec31d91959b85171",
+          "bytes": 1097
+        },
+        {
+          "name": "prodcast-license-v2026.9.17-rc.1-deployment.tar.gz",
+          "sha256": "488d6510dec34627c98a77cd63e8e7b75b273372574f94a295c88ca338d86a30",
+          "bytes": 3681
+        },
+        {
+          "name": "prodcast-license-v2026.9.17-rc.1-linux-amd64.tar.gz",
+          "sha256": "54e38326b92baa5109af5edbd0caa725d6f4448d9801a6f51cb0b20a5f231163",
+          "bytes": 74912694
+        },
+        {
+          "name": "release-manifest.json",
+          "sha256": "855c42361ed9573a0d86cd0ce823993ac293e383fceb95a7452719f57a2f83ab",
+          "bytes": 1460
+        },
+        {
+          "name": "SHA256SUMS",
+          "sha256": "1501380361570e74597970367d9199301c7fbe943252cc69a69c030300fc6dfd",
+          "bytes": 581
+        }
+      ],
+      "images": [
+        {
+          "name": "prodcast-license",
+          "reference": "ghcr.io/saatchi190499/prodcast-license@sha256:a8e3562311064aa667a07081739771f2c363198c9e3dd94c2c200758ba4b28d7",
+          "transport_tag": "ghcr.io/saatchi190499/prodcast-license:v2026.9.17-rc.1",
+          "image_id": "sha256:c01b732a0f69a387271f8e36b25c1b0f62a2e6ec587399a8958ff6f3a43c0941",
+          "platform": "linux/amd64"
+        }
+      ]
+    },
+    {
+      "component": "worker",
+      "repository": "saatchi190499/prodcast-worker",
+      "upstream_tag": "v2026.9.17-rc.1",
+      "source_commit": "3fb03104f8ac39d31a0d338910a504364cfaff2c",
+      "upstream_release_url": "https://github.com/saatchi190499/prodcast-worker/releases/tag/v2026.9.17-rc.1",
+      "original_production_accepted": false,
+      "assets": [
+        {
+          "name": "prodcast-worker-v2026.9.17-rc.1-windows-amd64.zip",
+          "sha256": "25bacca2791593ee80f80d35ebdbb92fa16cb13a27c22652db0bb539b67db5f6",
+          "bytes": 85616620
+        },
+        {
+          "name": "release-manifest.json",
+          "sha256": "3956c354323971c8b05f9deef9d564df6f231cf35070268b94b6eceaae2a7ee4",
+          "bytes": 863
+        },
+        {
+          "name": "SHA256SUMS",
+          "sha256": "8fa242ef7266d0b9c3519b5ed5f8b37fc15d703cb820a88f0483f05b26a15299",
+          "bytes": 206
+        }
+      ]
+    }
+  ],
+  "production_validation": {
+    "status": "passed_for_existing_site",
+    "date": "2026-09-21",
+    "details": "production-validation.json",
+    "new_clean_install": "not_executed"
+  },
+  "upstream_ci_exception": {
+    "workflow": "Shared stack versions",
+    "conclusion": "failure",
+    "reason": "Local PETEX wheel requirement is absent from the shared-input allowlist.",
+    "only_unlisted_worker_runtime_requirement": "./vendor/prodcast_petex_plugins-0.2.0-py3-none-any.whl",
+    "independent_verification": "Worker wheel SHA256 matches requirements.lock; plugin 0.2.0 matches App; all present common-policy package versions match.",
+    "upstream_status_changed": false
+  },
+  "external_prerequisites": [
+    "Operating systems",
+    "Docker/Compose",
+    "PostgreSQL/pgvector",
+    "Redis",
+    "NVIDIA driver",
+    "Ollama and model",
+    "DNS/NTP",
+    "Site TLS and unique secrets"
+  ],
+  "archive_checksum_policy": "SHA256SUMS covers payload plus release-manifest.json; the complete ZIP has a separate .zip.sha256 companion to avoid a circular hash.",
+  "artifacts": [
+    {
+      "name": "INSTALL-RU.md",
+      "bytes": 7476,
+      "sha256": "5d1ba10bc7c11b1062102d129cf6414bb982a41b052c50eff09b7638e00a7fce"
+    },
+    {
+      "name": "ProdCast-v0.2-manual.html",
+      "bytes": 163438,
+      "sha256": "661c0e5bc9146483630e775773fdbcffc1eee340797dd498a8e649b957f2ae84"
+    },
+    {
+      "name": "ProdCast-v0.2-manual.zip",
+      "bytes": 99067,
+      "sha256": "857f56e19c3bc89a59e24d7480147d9664d8c2e1ef02ab902a2553c77c9aceb0"
+    },
+    {
+      "name": "ProdCastAgent-Setup-v0.2.exe",
+      "bytes": 67392193,
+      "sha256": "36b2c34bfece02f770d17736eeaabadc10fedcc3c8087f65b2a6e299089965b2",
+      "upstream_asset": {
+        "repository": "saatchi190499/prodcast-agent",
+        "tag": "v2026.9.19-rc.1",
+        "name": "ProdCastAgent-Setup-v2026.9.19-rc.1.exe",
+        "sha256": "36b2c34bfece02f770d17736eeaabadc10fedcc3c8087f65b2a6e299089965b2",
+        "bytes_unchanged": true
+      }
+    },
+    {
+      "name": "RELEASE-NOTES.md",
+      "bytes": 6951,
+      "sha256": "261127f7359814a3fb17c8c343b7911d7d01cece6c5168ac59569cf418502c45"
+    },
+    {
+      "name": "prodcast-ai-v0.2-deployment.tar.gz",
+      "bytes": 92294,
+      "sha256": "4452eeabf1acb6c91a00d0091a17467e381d114dadc1aec3782ad2faabbd1bce",
+      "upstream_asset": {
+        "repository": "saatchi190499/prodcast-ai",
+        "tag": "v2026.9.17-rc.1",
+        "name": "prodcast-ai-v2026.9.17-rc.1-deployment.tar.gz",
+        "bytes_unchanged": false,
+        "changes": "Documentation/offline references; runtime images unchanged"
+      }
+    },
+    {
+      "name": "prodcast-ai-v0.2-linux-amd64.tar.gz",
+      "bytes": 87387455,
+      "sha256": "9d6517d8e2e55bb2434c4fb2f7136bcda09f542166944dedbd355ad90fab6777",
+      "upstream_asset": {
+        "repository": "saatchi190499/prodcast-ai",
+        "tag": "v2026.9.17-rc.1",
+        "name": "prodcast-ai-v2026.9.17-rc.1-linux-amd64.tar.gz",
+        "sha256": "9d6517d8e2e55bb2434c4fb2f7136bcda09f542166944dedbd355ad90fab6777",
+        "bytes_unchanged": true
+      }
+    },
+    {
+      "name": "prodcast-app-v0.2-deployment.tar.gz",
+      "bytes": 99122,
+      "sha256": "8bd7024dc264410204fe84b4eb8e1fd07ef22fde793e856554e0cb7d60041d50",
+      "upstream_asset": {
+        "repository": "saatchi190499/prodcast-app",
+        "tag": "v2026.9.19-rc.1",
+        "name": "prodcast-app-v2026.9.19-rc.1-deployment.tar.gz",
+        "bytes_unchanged": false,
+        "changes": "Documentation/offline references; runtime images unchanged"
+      }
+    },
+    {
+      "name": "prodcast-backend-v0.2-linux-amd64.tar.gz",
+      "bytes": 223416474,
+      "sha256": "6a69586e53b801c561187adb8f8f1667908b9b7de12210edd4b00789e2e9a1a1",
+      "upstream_asset": {
+        "repository": "saatchi190499/prodcast-app",
+        "tag": "v2026.9.19-rc.1",
+        "name": "prodcast-backend-v2026.9.19-rc.1-linux-amd64.tar.gz",
+        "sha256": "6a69586e53b801c561187adb8f8f1667908b9b7de12210edd4b00789e2e9a1a1",
+        "bytes_unchanged": true
+      }
+    },
+    {
+      "name": "prodcast-frontend-v0.2-linux-amd64.tar.gz",
+      "bytes": 34426192,
+      "sha256": "98162787f7ccc65cc917a21d8263988d14bdd6e27a3ed5a3f1db3476c0aec492",
+      "upstream_asset": {
+        "repository": "saatchi190499/prodcast-app",
+        "tag": "v2026.9.19-rc.1",
+        "name": "prodcast-frontend-v2026.9.19-rc.1-linux-amd64.tar.gz",
+        "sha256": "98162787f7ccc65cc917a21d8263988d14bdd6e27a3ed5a3f1db3476c0aec492",
+        "bytes_unchanged": true
+      }
+    },
+    {
+      "name": "prodcast-gateway-v0.2-linux-amd64.tar.gz",
+      "bytes": 27503351,
+      "sha256": "f60d06a3a0077c8decb1ffe61d4f4a963c058cc761a53a2649e8280b80f02a1a",
+      "upstream_asset": {
+        "repository": "saatchi190499/prodcast-app",
+        "tag": "v2026.9.19-rc.1",
+        "name": "prodcast-gateway-v2026.9.19-rc.1-linux-amd64.tar.gz",
+        "sha256": "f60d06a3a0077c8decb1ffe61d4f4a963c058cc761a53a2649e8280b80f02a1a",
+        "bytes_unchanged": true
+      }
+    },
+    {
+      "name": "prodcast-license-v0.2-deployment.tar.gz",
+      "bytes": 94325,
+      "sha256": "db0f541c8e91e8f8feef9b3ed705bcb99e4c0f1b1c132467e93bf9958832260a",
+      "upstream_asset": {
+        "repository": "saatchi190499/prodcast-license",
+        "tag": "v2026.9.17-rc.1",
+        "name": "prodcast-license-v2026.9.17-rc.1-deployment.tar.gz",
+        "bytes_unchanged": false,
+        "changes": "Documentation/offline references; runtime images unchanged"
+      }
+    },
+    {
+      "name": "prodcast-license-v0.2-linux-amd64.tar.gz",
+      "bytes": 74912694,
+      "sha256": "54e38326b92baa5109af5edbd0caa725d6f4448d9801a6f51cb0b20a5f231163",
+      "upstream_asset": {
+        "repository": "saatchi190499/prodcast-license",
+        "tag": "v2026.9.17-rc.1",
+        "name": "prodcast-license-v2026.9.17-rc.1-linux-amd64.tar.gz",
+        "sha256": "54e38326b92baa5109af5edbd0caa725d6f4448d9801a6f51cb0b20a5f231163",
+        "bytes_unchanged": true
+      }
+    },
+    {
+      "name": "prodcast-provenance-v0.2.zip",
+      "bytes": 38523,
+      "sha256": "2996173b947acb6ed0e8ea110dfae15596ddd5d3e1f2c95e2787afcc1253e51d"
+    },
+    {
+      "name": "prodcast-worker-v0.2-windows-amd64.zip",
+      "bytes": 85616620,
+      "sha256": "25bacca2791593ee80f80d35ebdbb92fa16cb13a27c22652db0bb539b67db5f6",
+      "upstream_asset": {
+        "repository": "saatchi190499/prodcast-worker",
+        "tag": "v2026.9.17-rc.1",
+        "name": "prodcast-worker-v2026.9.17-rc.1-windows-amd64.zip",
+        "sha256": "25bacca2791593ee80f80d35ebdbb92fa16cb13a27c22652db0bb539b67db5f6",
+        "bytes_unchanged": true
+      }
+    },
+    {
+      "name": "production-validation.json",
+      "bytes": 21123,
+      "sha256": "a5b16d69e5731e24b41899adfe8b6dfb1e2c9f84795401a815218765375554db"
+    }
+  ]
+}
