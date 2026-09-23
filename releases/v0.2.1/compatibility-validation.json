@@ -1,0 +1,95 @@
+{
+  "checksums": "all upstream App and v0.2 GitHub assets verified",
+  "images": [
+    {
+      "name": "prodcast-backend",
+      "image_id": "sha256:124f049fa44af7981da8e05b567e437fd9d0d200d0f9374316301375e8c5cf71",
+      "transport_tag": "ghcr.io/saatchi190499/prodcast-backend:v2026.9.23-rc.2",
+      "config_verified": true,
+      "entrypoint": [
+        "/app/entrypoint.sh"
+      ]
+    },
+    {
+      "name": "prodcast-frontend",
+      "image_id": "sha256:2032f36cce0abd334dfc65274e735c9584aa290f5f1671f0f3d7d5c2645d8d24",
+      "transport_tag": "ghcr.io/saatchi190499/prodcast-frontend:v2026.9.23-rc.2",
+      "config_verified": true,
+      "entrypoint": [
+        "/docker-entrypoint.sh"
+      ]
+    },
+    {
+      "name": "prodcast-gateway",
+      "image_id": "sha256:bc2f833266e0251496a200a2c95f7fe55d8ee41ef30ebf9c9d56bd1dd37a001d",
+      "transport_tag": "ghcr.io/saatchi190499/prodcast-gateway:v2026.9.23-rc.2",
+      "config_verified": true,
+      "entrypoint": [
+        "/docker-entrypoint.sh"
+      ]
+    }
+  ],
+  "compose_byte_identical_to_v02": true,
+  "backend_dependency_versions_unchanged": true,
+  "manager_customer_pfx_gateway_adapter": "passed",
+  "new_migrations": [
+    "backend/mainapp/apiapp/migrations/0042_schedule_output_policy.py"
+  ],
+  "migration_type": "three additive WorkflowScheduler fields; default merge",
+  "full_five_vm_upgrade_tested": false,
+  "running_sites_modified": false,
+  "distribution_version": "v0.2.1",
+  "recommended_manager": "0.1.11",
+  "unchanged_components": [
+    {
+      "release": "v0.2",
+      "name": "prodcast-ai-v0.2-deployment.tar.gz",
+      "sha256": "4452eeabf1acb6c91a00d0091a17467e381d114dadc1aec3782ad2faabbd1bce",
+      "bytes_unchanged": true,
+      "distribution_name": "prodcast-ai-v0.2.1-deployment.tar.gz"
+    },
+    {
+      "release": "v0.2",
+      "name": "prodcast-ai-v0.2-linux-amd64.tar.gz",
+      "sha256": "9d6517d8e2e55bb2434c4fb2f7136bcda09f542166944dedbd355ad90fab6777",
+      "bytes_unchanged": true,
+      "distribution_name": "prodcast-ai-v0.2.1-linux-amd64.tar.gz"
+    },
+    {
+      "release": "v0.2",
+      "name": "prodcast-license-v0.2-deployment.tar.gz",
+      "sha256": "db0f541c8e91e8f8feef9b3ed705bcb99e4c0f1b1c132467e93bf9958832260a",
+      "bytes_unchanged": true,
+      "distribution_name": "prodcast-license-v0.2.1-deployment.tar.gz"
+    },
+    {
+      "release": "v0.2",
+      "name": "prodcast-license-v0.2-linux-amd64.tar.gz",
+      "sha256": "54e38326b92baa5109af5edbd0caa725d6f4448d9801a6f51cb0b20a5f231163",
+      "bytes_unchanged": true,
+      "distribution_name": "prodcast-license-v0.2.1-linux-amd64.tar.gz"
+    },
+    {
+      "release": "v0.2",
+      "name": "prodcast-worker-v0.2-windows-amd64.zip",
+      "sha256": "25bacca2791593ee80f80d35ebdbb92fa16cb13a27c22652db0bb539b67db5f6",
+      "bytes_unchanged": true,
+      "distribution_name": "prodcast-worker-v0.2.1-windows-amd64.zip"
+    },
+    {
+      "release": "v0.2",
+      "name": "ProdCastAgent-Setup-v0.2.exe",
+      "sha256": "36b2c34bfece02f770d17736eeaabadc10fedcc3c8087f65b2a6e299089965b2",
+      "bytes_unchanged": true,
+      "distribution_name": "ProdCastAgent-Setup-v0.2.1.exe"
+    }
+  ],
+  "contract": {
+    "schema": 1,
+    "profile": "prodcast-five-vm-v1",
+    "upgrade_from": [
+      "v0.2"
+    ]
+  },
+  "acceptance_scope": "Artifact and adapter compatibility; not a completed five-VM upgrade acceptance"
+}

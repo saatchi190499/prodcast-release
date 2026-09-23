@@ -2,6 +2,12 @@
 
 Готовые дистрибутивы ProdCast. Исходный код приложений и история их сборки хранятся в отдельных репозиториях; здесь публикуются runtime-пакеты, инструкции и сведения о проверках.
 
+## Полный комплект v0.2.1 — Manager
+
+[ProdCast 0.2.1 — Complete](https://github.com/saatchi190499/prodcast-release/releases/tag/v0.2.1): App **v2026.9.23-rc.2**, остальные приложения побайтно сохранены из v0.2. Agent **v2026.9.19-rc.1**; AI, License, Worker **v2026.9.17-rc.1**.
+
+Скачайте **ProdCast-v0.2.1-complete.zip**. Для Manager 0.1.11 нужен SHA256 нового manifest из описания релиза. Используйте исходную площадку и «Обновить» для v0.2, «Установить» для новой площадки. [Инструкция](releases/v0.2.1/INSTALL-RU.md), [manifest](releases/v0.2.1/release-manifest.json), [границы проверок](releases/v0.2.1/compatibility-validation.json). Полный upgrade на пяти VM и функциональная приёмка нового App пока не выполнены.
+
 ## Полный комплект v0.2
 
 [**ProdCast 0.2 — Production**](https://github.com/saatchi190499/prodcast-release/releases/tag/v0.2) содержит **App, Agent, AI, License и Windows Worker**:
