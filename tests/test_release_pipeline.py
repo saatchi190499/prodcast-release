@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from assemble_release import build
 from publish_component import prepare, publish
 from publish_release import verify_complete
-from release_common import pack, record, sha256, unpack, write_json
+from release_common import pack, record, release, sha256, unpack, write_json
 
 COMMIT = 'a' * 40
 TAG = 'v0.5.0-rc.1'
@@ -146,6 +146,22 @@ class PipelineTests(unittest.TestCase):
         with patch('publish_component.draft', return_value={'assets': [{'name': 'assembly-lock.json'}]}):
             with self.assertRaisesRegex(ValueError, 'frozen'):
                 publish('v0.5.0', [])
+
+    def test_release_lookup_finds_drafts_on_later_pages(self):
+        value = {'tag_name': 'v0.5.0', 'draft': True, 'assets': [], 'id': 12}
+        with patch('release_common.gh', return_value=json.dumps([[{'tag_name': 'v0.4'}], [value]])):
+            self.assertEqual(release('v0.5.0'), value)
+
+    def test_release_lookup_rejects_duplicate_drafts(self):
+        with patch('release_common.gh', return_value=json.dumps([[{'tag_name': 'v0.5.0'}], [{'tag_name': 'v0.5.0'}]])):
+            with self.assertRaisesRegex(ValueError, 'Multiple releases'):
+                release('v0.5.0')
+
+    def test_missing_draft_is_not_created_by_component_builds(self):
+        with patch('publish_component.draft', side_effect=RuntimeError('HTTP 404')), patch('publish_component.gh') as gh:
+            with self.assertRaises(RuntimeError):
+                publish('v0.5.0', [])
+            gh.assert_not_called()
 
     def test_auth_errors_do_not_create_release(self):
         with patch('publish_component.draft', side_effect=RuntimeError('HTTP 403')), patch('publish_component.gh') as gh:

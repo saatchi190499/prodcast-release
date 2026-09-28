@@ -1,0 +1,29 @@
+name: Prepare release draft
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: New complete package version (for example v0.5.0)
+        type: string
+        required: true
+permissions:
+  contents: write
+concurrency:
+  group: release-assembly
+  cancel-in-progress: false
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14.7'
+      - name: Create or reuse one unfrozen draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: python scripts/prepare_release.py --version "$VERSION"
