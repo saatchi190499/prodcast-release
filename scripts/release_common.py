@@ -87,7 +87,15 @@ def gh(*args, json_input=None):
 
 
 def release(tag):
-    return json.loads(gh('api', f'repos/{REPO}/releases/tags/{version(tag)}'))
+    # The tag endpoint excludes drafts, even for authenticated owners.
+    tag = version(tag)
+    pages = json.loads(gh('api', f'repos/{REPO}/releases?per_page=100', '--paginate', '--slurp'))
+    matches = [item for page in pages for item in page if item['tag_name'] == tag]
+    if len(matches) > 1:
+        raise ValueError('Multiple releases have this tag; resolve duplicate drafts first')
+    if not matches:
+        raise RuntimeError('Release not found (HTTP 404): ' + tag)
+    return matches[0]
 
 
 def draft(tag):

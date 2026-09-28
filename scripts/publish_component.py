@@ -51,19 +51,8 @@ def prepare(component, tag, source_commit, folder, output):
 
 def publish(tag, paths):
     version(tag)
-    try:
-        draft(tag)
-    except RuntimeError as exc:
-        # Create only after a confirmed missing release; an auth/network error is not absence.
-        if '404' not in str(exc):
-            raise
-        try:
-            gh('release', 'create', tag, '--repo', REPO, '--target', 'main', '--draft',
-               '--title', f'ProdCast {tag} — draft', '--notes',
-               'Component builds are collecting here. Assemble and validate the complete package before publishing.')
-        except RuntimeError:
-            # Concurrent components can race to create the same draft.
-            draft(tag)
+    # Create the shared draft once, before starting concurrent component builds.
+    # GitHub allows multiple drafts with the same tag, so publishers must not create it.
     existing = {a['name'] for a in draft(tag)['assets']}
     # Once assembly starts, component uploads cannot change the input set.
     if 'assembly-lock.json' in existing:
