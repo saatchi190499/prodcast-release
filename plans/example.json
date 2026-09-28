@@ -1,0 +1,13 @@
+{
+  "version": "v0.5.0",
+  "base": {
+    "version": "v0.4",
+    "manifest_sha256": "0f195e96669f31922885b2dfbdcfdaa805a2020f6f6edb668be1226ead644942"
+  },
+  "components": {
+    "app": {
+      "descriptor": "prodcast-app-v0.5.0-rc.1-component.json",
+      "sha256": "REPLACE_WITH_DESCRIPTOR_SHA256_FROM_COMPONENT_BUILD"
+    }
+  }
+}

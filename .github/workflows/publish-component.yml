@@ -1,0 +1,43 @@
+name: Collect component package
+on:
+  workflow_call:
+    inputs:
+      component:
+        type: string
+        required: true
+      component_tag:
+        type: string
+        required: true
+      publisher_ref:
+        description: Same immutable commit used for this reusable workflow
+        type: string
+        required: true
+    secrets:
+      RELEASE_REPO_TOKEN:
+        required: true
+permissions:
+  contents: read
+  actions: read
+jobs:
+  contribute:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: saatchi190499/prodcast-release
+          ref: ${{ inputs.publisher_ref }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14.7'
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-payload
+          path: build/payload
+      - name: Validate and contribute to common draft
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_REPO_TOKEN }}
+          COMPONENT: ${{ inputs.component }}
+          COMPONENT_TAG: ${{ inputs.component_tag }}
+        run: python scripts/publish_component.py --component "$COMPONENT" --tag "$COMPONENT_TAG" --source-commit "$GITHUB_SHA" --directory build/payload

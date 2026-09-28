@@ -1,0 +1,31 @@
+name: Assemble complete release
+on:
+  workflow_dispatch:
+    inputs:
+      plan:
+        description: Reviewed JSON plan path under plans/ (exact base and component hashes)
+        type: string
+        required: true
+permissions:
+  contents: write
+concurrency:
+  group: release-assembly
+  cancel-in-progress: false
+jobs:
+  assemble:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14.7'
+      - name: Test release tooling
+        run: python -m unittest discover -s tests -v
+      - name: Build and upload Complete to draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLAN: ${{ inputs.plan }}
+        run: python scripts/assemble_release.py --plan "$PLAN"
