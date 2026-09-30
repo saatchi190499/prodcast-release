@@ -1,0 +1,201 @@
+"""Explicit, resumable backup/restore/reset operations for the selected site."""
+import contextlib
+import copy
+import json
+import os
+import shutil
+import subprocess
+import tempfile
+import uuid
+from pathlib import Path
+from . import backup_archive as archive
+from .config import atomic_json,file_lock,core_roles,worker_roles,topology_hash
+from .engine import Engine,RESOURCES
+from .portable import open_credentials,save_config
+
+
+@contextlib.contextmanager
+def private_workspace(parent):
+    parent=Path(parent);parent.mkdir(parents=True,exist_ok=True)
+    path=Path(tempfile.mkdtemp(prefix='backup-',dir=parent))
+    try:
+        os.chmod(path,0o700)
+        if os.name=='nt':
+            who=subprocess.run(['whoami','/user','/fo','csv','/nh'],capture_output=True,text=True,check=True).stdout
+            import csv
+            sid=next(csv.reader([who.strip()]))[1]
+            subprocess.run(['icacls',str(path),'/inheritance:r','/grant:r','*'+sid+':(OI)(CI)(F)','*S-1-5-18:(OI)(CI)(F)'],capture_output=True,check=True)
+        yield path
+    finally:shutil.rmtree(path)
+
+
+def read_backup(path,password,folder):
+    plain=folder/'archive.zip';archive.decrypt(path,plain,password)
+    return archive.unpack(plain,folder/'data')
+
+
+def import_backup_profile(path,password,parent,destination):
+    """Recover identity and encryption keys; SSH credentials must be supplied again."""
+    destination=Path(destination)
+    if destination.exists():raise ValueError('Choose a new profile directory')
+    with private_workspace(parent) as folder:
+        data=read_backup(path,password,folder)
+        site=copy.deepcopy(data['site'])
+        for host in site['hosts'].values():host.update(auth='password',key_path='')
+        config=save_config(destination,site)
+        vault=open_credentials(destination);vault.data=data['vault'];vault.data['ssh']={};vault.save()
+        atomic_json(destination/'recovery-source.json',{'version':data['version'],'manifest':data['manifest'],'installation_id':vault.data['installation_id']})
+        return config
+
+
+class Maintenance:
+    def __init__(self,engine):self.e=engine;self.remotes={};self.statuses={};self.claimed=[]
+
+    def action(self,role,action,**extra):
+        payload=self.e.payload(role,self.operation,self.mode);payload.update(extra)
+        if role in self.statuses:payload['version']=self.statuses[role].get('version','')
+        payload['external_activation']=bool(self.e.vault.data.get('activation'))
+        self.e.log(role+': '+action)
+        return self.remotes[role].action(payload,action,RESOURCES)
+
+    def connect(self,roles):
+        for role in roles:
+            r=self.e.factory(role,self.e.c['hosts'][role],self.e.vault.data.get('ssh',{}).get(role,{}),self.e.log)
+            self.remotes[role]=r;r.diagnostics=self.e.diagnostics;r.probe();r.prepare_stage()
+            for name in (('worker.ps1','worker-service-runner.py') if role.startswith('worker') else ('linux.py','maintenance_linux.py')):
+                r.put_bytes(name,(RESOURCES/name).read_bytes())
+            self.statuses[role]=self.action(role,'preflight')
+        for role in roles:
+            self.action(role,'maintenance-claim');self.claimed.append(role)
+
+    def snapshot(self):
+        return {r:self.action(r,'maintenance-snapshot') for r in ('app',*worker_roles(self.e.c))}
+
+    def quiesce(self):
+        self.action('app','pause');self.action('app','drain')
+        for role in worker_roles(self.e.c):self.action(role,'maintenance-stop')
+        self.action('app','maintenance-stop')
+
+    def resume(self,previous):
+        failures=[]
+        for role in (*worker_roles(self.e.c),'app'):
+            try:self.action(role,'maintenance-resume',previous_runtime=previous[role])
+            except Exception:failures.append(role)
+        if not failures:
+            for role in (*worker_roles(self.e.c),'app'):
+                try:self.action(role,'maintenance-health',previous_runtime=previous[role])
+                except Exception:failures.append(role)
+        if failures:
+            if self.mode=='restore':
+                for role in (*worker_roles(self.e.c),'app'):
+                    try:self.action(role,'maintenance-stop')
+                    except Exception:self.e.log(role+': could not stop after incomplete restart; inspect this VM')
+            raise RuntimeError('Could not restart: '+', '.join(failures)+'. Retry this operation.')
+
+    def download(self,role,folder):
+        result=self.action(role,'data-export');expected={'prodcast2.dump'} if role=='db' else {'media.tar.gz','configuration.tar.gz'}
+        if set(result['files'])!=expected:raise ValueError('Unexpected backup files returned by server')
+        r=self.remotes[role]
+        for name,spec in result['files'].items():
+            target=folder/role/name;target.parent.mkdir(parents=True,exist_ok=True)
+            with r.client.open_sftp() as s:s.get(r.stage+'/'+name,str(target))
+            os.chmod(target,0o600)
+            if target.stat().st_size!=spec['bytes'] or archive.sha(target)!=spec['sha256']:raise ValueError('Downloaded backup checksum mismatch')
+
+    def run(self,mode,path='',password=''):
+        if mode not in ('export','restore','reset-keep','reset-full'):raise ValueError('Unknown maintenance mode')
+        if self.e.vault.data.get('topology')!=topology_hash(self.e.c):raise ValueError('Use the original installation profile or import it from a backup')
+        self.mode=mode;local=self.e.dir/'maintenance-journal.json'
+        with file_lock(self.e.dir/'operation.lock'):
+            prior=json.loads(local.read_text('utf-8')) if local.exists() else {}
+            pending=prior.get('status') in ('running','failed')
+            if pending and prior['mode']!=mode:raise ValueError('Resume the previous maintenance operation first: '+prior['mode'])
+            self.operation=prior['operation'] if pending else uuid.uuid4().hex
+            journal=prior if pending else {'mode':mode,'operation':self.operation,'steps':[]}
+            journal['status']='running';atomic_json(local,journal)
+            roles=list(core_roles(self.e.c))
+            if mode.startswith('reset-') and self.e.c.get('install_ai',True):roles.append('ai')
+            try:
+                self.connect(roles)
+                if journal.get('work_complete'):
+                    pass  # Only lease release was interrupted; never repeat data changes.
+                elif mode=='export' and journal.get('backup_destination'):
+                    saved=Path(journal['backup_destination'])
+                    if Path(path).resolve()!=saved or not saved.is_file() or archive.sha(saved)!=journal['backup_sha256']:
+                        raise ValueError('Resume with the already exported backup file, unchanged')
+                    self.resume(journal['previous_runtime'])
+                elif mode.startswith('reset-'):
+                    for role in [*worker_roles(self.e.c),'app',*(['ai'] if 'ai' in roles else []),'db']:
+                        self.action(role,'reset');journal['steps'].append(role);atomic_json(local,journal)
+                    for name in (('journal.json','ai-journal.json','app-tls-journal.json') if mode=='reset-full' else ()):
+                        source=self.e.dir/name
+                        if source.exists():
+                            destination=self.e.dir/'history'/(self.operation+'-'+name);destination.parent.mkdir(exist_ok=True);source.replace(destination)
+                    # Identity/license/keys are retained locally, including after full reset.
+                    self.e.log('Reset complete. '+('Use Repair with the exact installed release. For an incomplete first install, resume Install with its original release.' if mode=='reset-keep' else 'Use Install to deploy again.'))
+                else:
+                    if not all(s.get('managed') and s.get('version') for s in self.statuses.values()):raise ValueError('Install App, DB and Workers before backup/restore')
+                    versions={(s['version'],s['manifest']) for s in self.statuses.values()}
+                    if len(versions)!=1:raise ValueError('Finish the stack update before backup/restore')
+                    version,manifest=next(iter(versions))
+                    with private_workspace(self.e.dir/'temporary') as folder:
+                        recovery=None
+                        if mode=='restore':
+                            recovery=read_backup(path,password,folder)
+                            if recovery['vault']['installation_id']!=self.e.vault.data['installation_id']:raise ValueError('Backup belongs to another installation; import its profile first')
+                            if (recovery['version'],recovery['manifest'])!=(version,manifest):raise ValueError('Restore requires the exact complete release recorded in this backup')
+                            if recovery['vault']['secrets']!=self.e.vault.data['secrets']:raise ValueError('Encryption keys differ; import the original backup profile before restoring')
+                            source_sha=archive.sha(path)
+                            if journal.get('source_sha256',source_sha)!=source_sha:raise ValueError('Resume restore with the original backup')
+                            journal['source_sha256']=source_sha
+                            for role,name in [('db','prodcast2.dump'),('app','media.tar.gz')]:
+                                source=folder/'data'/role/name;self.remotes[role].put(source)
+                                extra={'restore_file':{'name':name,'bytes':source.stat().st_size,'sha256':archive.sha(source)},'restore_manifest':manifest}
+                                self.action(role,'data-validate',**extra)
+                        previous=journal.get('previous_runtime') or self.snapshot()
+                        journal['previous_runtime']=previous;atomic_json(local,journal)
+                        export_ok=False
+                        try:
+                            if not (mode=='restore' and journal.get('quiesced')):
+                                self.quiesce();journal['quiesced']=True;atomic_json(local,journal)
+                            else:
+                                for role in (*worker_roles(self.e.c),'app'):self.action(role,'maintenance-stop')
+                            if mode=='export':
+                                data=folder/'data'
+                                for role in ('db','app'):self.download(role,data)
+                                vault=copy.deepcopy(self.e.vault.data);vault.pop('ssh',None)
+                                record={'schema':1,'database_major':18,'version':version,'manifest':manifest,'site':self.e.c,'vault':vault}
+                                (data/'recovery.json').write_text(json.dumps(record),'utf-8')
+                                archive.pack(data,folder/'backup.zip');archive.encrypt(folder/'backup.zip',path,password);export_ok=True
+                                journal.update(backup_destination=str(Path(path).resolve()),backup_sha256=archive.sha(path));atomic_json(local,journal)
+                            else:
+                                # Keep the original safety copy when retrying a partial restore.
+                                for role in ('db','app'):
+                                    marker='safety-'+role
+                                    if marker not in journal['steps']:
+                                        self.action(role,'data-export');journal['steps'].append(marker);atomic_json(local,journal)
+                                for role,name in [('db','prodcast2.dump'),('app','media.tar.gz')]:
+                                    source=folder/'data'/role/name;self.remotes[role].put(source)
+                                    self.action(role,'data-restore',restore_file={'name':name,'bytes':source.stat().st_size,'sha256':archive.sha(source)},restore_manifest=manifest)
+                                export_ok=True
+                        finally:
+                            # A partially restored stack must remain stopped until a successful retry.
+                            if mode=='export' or export_ok:self.resume(previous)
+                        self.e.log('Backup saved: '+str(path) if mode=='export' else 'Database and App files restored.')
+                journal['work_complete']=True;atomic_json(local,journal)
+                for role in list(self.claimed):
+                    self.action(role,'maintenance-release');self.claimed.remove(role)
+                journal['status']='complete';atomic_json(local,journal)
+            except Exception:
+                journal['status']='failed';atomic_json(local,journal)
+                self.e.log('Maintenance stopped. Keep the profile and backup; retry the same operation after correcting the cause.')
+                raise
+            finally:
+                for role in self.claimed:
+                    if journal['status']!='complete' and mode in ('restore','reset-keep','reset-full'):continue
+                    try:self.action(role,'maintenance-release')
+                    except Exception:self.e.log(role+': maintenance lease retained; retry from the same profile')
+                for r in self.remotes.values():
+                    try:r.cleanup()
+                    except Exception:pass
+                    r.close()

@@ -1,0 +1,16 @@
+.build/
+dist/
+__pycache__/
+.pytest_cache/
+*.pyc
+vault.json
+site.json
+journal.json
+cache/
+operation.lock
+report-*.json
+logs/
+data/
+secrets.json
+secrets.key
+credentials.lock

@@ -1,0 +1,113 @@
+from .i18n import tr
+import argparse
+import getpass
+import json
+import sys
+from pathlib import Path
+from .config import example, validate, atomic_json, ROLES, roles, worker_roles
+from .vault import Vault
+from .release import Release
+from .engine import Engine, plan, RESOURCES
+from .ssh import scan
+from .session_logs import SessionLog, application_directory
+from .portable import (last_directory, import_site, runtime_config, save_config,
+                       open_credentials, LegacyPasswordRequired, remember)
+
+def main():
+    # Windows pipes may default to an ANSI code page. Deployment messages and
+    # client paths contain Unicode; a logging error must not interrupt a step.
+    for stream in (sys.stdout,sys.stderr):
+        if stream is not None and hasattr(stream,'reconfigure'):
+            stream.reconfigure(encoding='utf-8',errors='backslashreplace')
+    parser=argparse.ArgumentParser(description='ProdCast deployment manager')
+    parser.add_argument('action',nargs='?',choices=['gui','init','trust','credentials','plan','check','install','update','repair','ai','status','backup','import-pfx','app-tls','self-test'],default='gui')
+    parser.add_argument('--site',default=None);parser.add_argument('--release');parser.add_argument('--manifest-sha256',default='');parser.add_argument('--yes',action='store_true');parser.add_argument('--role',choices=('app','db','ai')+tuple('worker'+str(n) for n in range(1,17)))
+    parser.add_argument('--gui-smoke',action='store_true',help='With self-test: initialize and close the hidden GUI without network access')
+    parser.add_argument('--pfx',help='Customer PFX/P12 file; its password is requested interactively')
+    parser.add_argument('--app-url',help='Customer HTTPS origin matching the PFX SAN')
+    parser.add_argument('--ca-chain',help='Optional PEM CA chain including root, if absent from PFX')
+    parser.add_argument('--ai-model',default='',help='Separately downloaded official Ollama model file for an offline release')
+    parser.add_argument('--ollama-components',default='',help='Separate Ollama components ZIP from the offline release')
+    a=parser.parse_args();home=application_directory();path=Path(a.site).resolve() if a.site else last_directory(home)/'site.json';directory=path.parent
+    if a.action=='gui':
+        from .gui import main as gui
+        gui();return
+    if a.action=='self-test':
+        for name in ('linux.py','worker.ps1','worker-service-runner.py','app.env.in','worker-grants.sql','directory_probe.py','maintenance_linux.py'):assert (RESOURCES/name).stat().st_size>100
+        assert len(list((RESOURCES/'ldap_deps').glob('*.whl')))==2
+        compile((RESOURCES/'linux.py').read_text('utf-8'),'linux.py','exec')
+        validate(example())
+        # Exercise the bundled PKCS#12/verification code with synthetic material only.
+        from .app_certificate import read_pfx
+        from .vault import make_pki
+        from cryptography import x509
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.serialization import pkcs12
+        c=example();c['public_url']='https://prodcast.example.test';tls=make_pki(c)
+        data=pkcs12.serialize_key_and_certificates(b'self-test',
+            serialization.load_pem_private_key(tls['site.key'].encode(),None),
+            x509.load_pem_x509_certificate(tls['site.crt'].encode()),
+            [x509.load_pem_x509_certificate(tls['ca.crt'].encode())],serialization.NoEncryption())
+        assert read_pfx(data,'',c['public_url'])['url']==c['public_url']
+        if a.gui_smoke:
+            import tkinter as tk
+            import tempfile
+            from .gui import App
+            with tempfile.TemporaryDirectory(prefix='manager-self-test-',dir=home) as temporary:
+                test_home=Path(temporary)
+                v=open_credentials(test_home/'test-site');v.data={'check':'synthetic'};v.save()
+                assert open_credentials(test_home/'test-site').data=={'check':'synthetic'}
+                root=tk.Tk();root.withdraw();app=App(root,log_dir=test_home/'logs',app_home=test_home);root.update()
+                assert len(app.hostvars)==5 and app.config()['schema']==1
+                assert app.config()['hosts']['ai']['address']=='' and not app.install_ai.get()
+                app.worker_count.set('16');assert len(app.hostframe.grid_slaves(column=0))==20
+                app.worker_count.set('1');assert len(worker_roles(app.config()))==1
+                app.language_choice.set('English');app.change_language()
+                assert tr('Установить AI')=='Install AI'
+                from .directory_dialog import DirectoryDialog
+                dialog=DirectoryDialog(root,{},lambda value:None,lambda *args:{'ok':True});dialog.withdraw()
+                from .directory_dialog import NOTICE
+                assert 'applied' in tr(NOTICE) and not dialog.enabled.get()
+                dialog.close()
+                root.destroy()
+        print('PASS: bundled resources, configuration and PFX import'+(' and portable credentials / GUI initialization' if a.gui_smoke else ''));return
+    if a.action=='init':
+        if path.exists():raise ValueError('Site file already exists')
+        atomic_json(path,example());print('Edit VM addresses and site settings in '+str(path));return
+    directory,c=import_site(path,home);path=directory/'site.json';remember(home,directory)
+    if a.action=='plan':print(json.dumps(plan('update' if a.release else 'install',c.get('install_ai',True),worker_roles(c)),indent=2));return
+    if a.action=='trust':
+        for r in ([a.role] if a.role else [r for r in roles(c) if r!='ai' or c.get('install_ai',True)]):
+            fp=scan(c['hosts'][r]);print(r,c['hosts'][r]['address'],fp)
+            if input('Verify through VM console; type the full fingerprint to trust: ').strip()!=fp:raise ValueError('Fingerprint not confirmed')
+            c['hosts'][r]['fingerprint']=fp;save_config(directory,c)
+        return
+    try:v=open_credentials(directory)
+    except LegacyPasswordRequired:v=open_credentials(directory,getpass.getpass('Original vault password (one-time import): '))
+    if a.action=='import-pfx':
+        from .app_certificate import read_pfx,store_app_certificate
+        if not a.pfx or not a.app_url:raise ValueError('Provide --pfx and --app-url')
+        material=read_pfx(Path(a.pfx).read_bytes(),getpass.getpass('PFX password: '),a.app_url,
+                          Path(a.ca_chain).read_bytes() if a.ca_chain else b'')
+        store_app_certificate(v,c,material)
+        print(json.dumps({'url':material['url'],**material['info'],'saved_to_vault':True,'server_changed':False},ensure_ascii=False,indent=2))
+        return
+    if a.action=='credentials':
+        for r in ([a.role] if a.role else [r for r in roles(c) if r!='ai' or c.get('install_ai',True)]):
+            auth={};h=c['hosts'][r]
+            auth['password' if h['auth']=='password' else 'passphrase']=getpass.getpass(r+': SSH password / key passphrase: ')
+            if not r.startswith('worker') and h['username']!='root':auth['sudo_password']=getpass.getpass(r+': sudo password (empty for NOPASSWD): ')
+            v.data.setdefault('ssh',{})[r]=auth
+        v.save();return
+    if a.action in ('install','update','repair','backup','app-tls','ai') and not a.yes:raise ValueError('Review plan and provide --yes to apply this operation')
+    release=Release(a.release,directory/'cache',a.manifest_sha256,validate_ai=False,model_path=a.ai_model,ollama_path=a.ollama_components) if a.release else None
+    logger=SessionLog();logger.protect(v.data)
+    def log(message):print(logger.append(message),flush=True)
+    log(tr('Локальный журнал: ')+str(logger.path))
+    try:Engine(c,v,release,directory,log,diagnostics=logger).run(a.action)
+    except Exception as e:
+        log(tr('ОШИБКА: ')+str(e));raise
+
+if __name__=='__main__':
+    try:main()
+    except Exception as e:print('ERROR:',e);raise SystemExit(1)

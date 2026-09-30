@@ -1,0 +1,366 @@
+from .i18n import tr
+import contextlib
+import json
+import os
+import time
+import uuid
+from pathlib import Path
+from .config import ROLES, CORE_ROLES, core_roles, worker_roles, validate, topology_hash, atomic_json, file_lock
+from .ssh import Remote
+from .certificates import upgrade_legacy_certificates
+from .app_certificate import validate_for_site
+from .directory import app_directory
+
+RESOURCES=Path(__file__).parent/'resources'
+
+def plan(mode,install_ai=True,workers=None):
+    workers=tuple(workers) if workers is not None else ('worker1','worker2')
+    core=('app','db')+workers
+    common=[(r,'preflight') for r in core]
+    optional=[('ai','preflight')]+([] if mode=='check' else [('ai',mode)]) if install_ai else []
+    if mode=='status': return common+[(r,'status') for r in core]+optional
+    if mode=='check': return common+optional
+    if mode=='backup': return common+[(r,'backup') for r in ('db','app')+workers]+optional
+    if mode=='repair':
+        return common+[(r,'claim') for r in core]+[(r,'bootstrap') for r in ('db','app')]+[(r,'repair') for r in ('db','app')+workers]+[('app','verify'),('app','beat')]+[(r,'commit') for r in core]+([('ai','repair')] if install_ai else [])
+    start=[(r,'claim') for r in core]
+    if mode=='update':
+        start += [('app','pause'),('app','drain')]+[(r,'stop') for r in workers]+[('app','stop')]
+        start += [(r,'backup') for r in ('db','app')+workers]
+    start += [(r,'bootstrap') for r in ('db','app')]
+    start += [('db','install'),('app','configure'),('app','migrate'),('db','grants'),('app','start')]+[(r,'install') for r in workers]+[('app','verify'),('app','beat')]
+    start += [(r,'commit') for r in core]
+    tail=[('ai','preflight'),('ai','claim'),('ai','bootstrap')]
+    if mode=='update':tail += [('ai','backup')]
+    tail += [('ai','install'),('app','verify-ai'),('ai','commit')]
+    return common+start+(tail if install_ai else [])
+
+class Engine:
+    def __init__(self,c,vault,release,state_dir,log=print,remote_factory=Remote,diagnostics=None):
+        self.c=validate(c,True); self.vault=vault; self.release=release
+        self.dir=Path(state_dir); self.dir.mkdir(parents=True,exist_ok=True)
+        self.log=log; self.factory=remote_factory; self.remotes={}
+        self.report=[]
+        self.diagnostics=diagnostics
+
+    def payload(self,role,operation,mode):
+        secrets=self.vault.data.get('secrets',{}); tls=self.vault.data.get('tls',{})
+        if role.startswith('worker'):
+            n=f'{int(role[6:]):02}'
+            allowed=['PW_W'+n,'REDIS_W'+n,'MEDIA_KEY','SIGNING_KEY','SVC_W'+n];certs=[]
+        else:
+            allowed={
+                'db':'PG_ADMIN PW_APP PW_LICENSE PW_AI REDIS_ADMIN REDIS_APP',
+                'ai':'PW_AI AI_HASH AI_KEY',
+                'app':'PW_APP PW_LICENSE REDIS_APP DJANGO_KEY FERNET_KEY MODULE_KEY RESOLVE_KEY MEDIA_KEY SIGNING_KEY METRICS_KEY AI_KEY AI_BASIC LICENSE_SALT LICENSE_BOOTSTRAP ADMIN_PASSWORD'}[role].split()
+            if role=='db':
+                allowed += [prefix+f'{int(r[6:]):02}' for r in worker_roles(self.c) for prefix in ('PW_W','REDIS_W')]
+            certs={'db':['postgres','redis'],'ai':['ai'],'app':['site','license']}[role]
+        files=self.release.for_role(role) if self.release else {}
+        return dict(site=self.c,topology=topology_hash(self.c),installation_id=self.vault.data.get('installation_id',''),role=role,operation=operation,mode=mode,
+                    version=self.release.version if self.release else '',
+                    manifest=self.release.digest if self.release else '',
+                    files={k:{'name':v.name,'sha256':self.release.offline_spec['external_model']['sha256'] if k=='offline-model_blob' else self.release.assets[v.name]['sha256']} for k,v in files.items()},
+                    images=self.release.images if self.release else {},
+                    offline=getattr(self.release,'offline_spec',{}),
+                    secrets={k:secrets[k] for k in allowed if k in secrets},
+                    tls={k:v for k,v in tls.items() if k=='ca.crt' or k.rsplit('.',1)[0] in certs},
+                    app_tls=self.vault.data.get('app_tls') if role=='app' else None,
+                    external_activation=getattr(self.release,'external_activation',False),
+                    activation=self.vault.data.get('activation') if role=='app' else None,
+                    directory=app_directory(self.vault.data.get('directory')) if role=='app' else None)
+
+    def run(self,mode):
+        if mode not in ('check','status','install','update','repair','backup','app-tls','ai'): raise ValueError('Unknown operation')
+        if mode in ('install','update','repair','ai') and not self.release: raise ValueError('Select a verified release')
+        if mode in ('install','update','repair') and hasattr(self.release,'validate_worker_count'):
+            self.release.validate_worker_count(len(worker_roles(self.c)))
+        if mode in ('install','update') and self.vault.data.get('directory') is not None:
+            if not self.release.doc.get('management',{}).get('directory_configuration'):
+                raise ValueError('LDAP configuration requires a release with the App directory configuration contract (v0.5.0 or later).')
+        with file_lock(self.dir/'operation.lock'):
+            maintenance_path=self.dir/'maintenance-journal.json'
+            if mode not in ('check','status') and maintenance_path.exists() and json.loads(maintenance_path.read_text('utf-8')).get('status') in ('running','failed'):
+                raise ValueError('Resume the interrupted backup/restore/reset operation before deploying')
+            tls_journal=self.dir/'app-tls-journal.json'
+            if mode in ('install','update','repair') and tls_journal.exists() and json.loads(tls_journal.read_text('utf-8')).get('status') in ('running','failed'):
+                raise ValueError(tr('Сначала повторите «Применить сертификат на App» для завершения предыдущей операции.'))
+            if mode in ('install','update','repair','app-tls') and self.vault.data.get('app_tls'):
+                validate_for_site(self.vault.data['app_tls'],self.c)
+            if mode=='app-tls':
+                return self._apply_app_tls()
+            if mode=='ai':
+                core_path=self.dir/'journal.json'
+                core=json.loads(core_path.read_text('utf-8')) if core_path.exists() else {}
+                if core.get('status')!='complete':raise ValueError(tr('Сначала завершите установку основного стека.'))
+                if not self.c.get('install_ai',True) or not core.get('install_ai',True):raise ValueError(tr('Включите AI на вкладке серверов и выполните обновление основного стека для настройки App.'))
+                if self.vault.data.get('topology')!=topology_hash(self.c):raise ValueError('Use the original installation profile')
+                if self.diagnostics:self.diagnostics.protect(self.vault.data)
+                result=self._optional_ai('update',core['operation'])
+                report_path=self.dir/('report-'+core['operation']+'.json')
+                try:
+                    report=json.loads(report_path.read_text('utf-8')) if report_path.exists() else {'mode':core['mode'],'operation':core['operation'],'status':'complete','core_status':'complete'}
+                    report['ai']=result;atomic_json(report_path,report)
+                except (OSError,ValueError):self.log(tr('Результат AI сохранён отдельно; общий отчёт обновить не удалось.'))
+                return result
+            if mode in ('install','update','repair'):
+                if mode=='repair':
+                    if self.vault.data.get('topology')!=topology_hash(self.c):raise ValueError('Recovery requires the original installation profile')
+                else:self.vault.initialize(self.c)
+                if getattr(self.release,'external_activation',False):
+                    from .activation import validate_activation, installation_id
+                    if not self.vault.data.get('activation'):
+                        raise ValueError(tr('Сначала сохраните онлайн или офлайн активацию App на вкладке площадки.'))
+                    validate_activation(self.vault.data['activation'],installation_id(self.vault))
+                    if getattr(self.release,'offline',False) and self.vault.data['activation']['mode']!='offline':
+                        raise ValueError(tr('Офлайн-релиз требует выданный файл активации и публичный PEM.'))
+                if mode!='repair' and upgrade_legacy_certificates(self.vault):
+                    self.log(tr('Старые сертификаты дополнены AKI/SKI; ключи и CA сохранены. Зашифрованная копия прежнего vault находится в history.'))
+            elif mode=='backup' or (mode=='status' and self.vault.data.get('topology')):
+                if self.vault.data.get('topology')!=topology_hash(self.c): raise ValueError('Use the original site file and vault for this installation')
+            if self.diagnostics:self.diagnostics.protect(self.vault.data)
+            return self._run(mode)
+
+    def _apply_app_tls(self):
+        if not self.vault.data.get('app_tls'):
+            raise ValueError(tr('Сначала импортируйте PFX на вкладке «Сертификат App».'))
+        if self.vault.data.get('topology')!=topology_hash(self.c):
+            raise ValueError(tr('Нужны исходные site.json и vault уже установленной площадки.'))
+        path=self.dir/'journal.json'
+        if path.exists() and json.loads(path.read_text('utf-8')).get('status') in ('running','failed'):
+            raise ValueError(tr('Сначала завершите прерванную установку или обновление.'))
+        path=self.dir/'app-tls-journal.json'
+        journal=json.loads(path.read_text('utf-8')) if path.exists() else {}
+        operation=journal.get('operation') if journal.get('status') in ('running','failed') else uuid.uuid4().hex
+        if self.diagnostics:self.diagnostics.protect(self.vault.data)
+        r=self.factory('app',self.c['hosts']['app'],self.vault.data.get('ssh',{}).get('app',{}),self.log)
+        r.diagnostics=self.diagnostics
+        try:
+            self.log(tr('app: проверка SSH перед применением сертификата'))
+            r.probe();r.prepare_stage()
+            r.put_bytes('linux.py',(RESOURCES/'linux.py').read_bytes())
+            payload=self.payload('app',operation,'app-tls')
+            status=r.action(payload,'preflight',RESOURCES)
+            if not status.get('managed') or not status.get('version'):
+                raise ValueError(tr('Сначала завершите установку. При первой установке импортированный PFX применяется автоматически.'))
+            journal={'operation':operation,'status':'running','url':self.vault.data['app_tls']['url']}
+            atomic_json(path,journal)
+            self.log(tr('app: установка сертификата и перезапуск веб-сервисов; возможна краткая недоступность сайта'))
+            result=r.action(payload,'app-tls',RESOURCES)
+            journal.update(status='complete',result=result);atomic_json(path,journal)
+            self.log(tr('app: сертификат применён; HTTPS проверен для ')+journal['url'])
+            self.log(tr('Для браузеров нужен DNS клиента и доверие к CA организации. Проверка сервера не меняет настройки ПК.'))
+            return result
+        except Exception:
+            if journal.get('status')=='running':
+                journal['status']='failed';atomic_json(path,journal)
+            self.log(tr('Сертификат сохранён в vault. Устраните причину и повторите «Применить сертификат на App».'))
+            raise
+        finally:
+            try:r.cleanup()
+            finally:r.close()
+
+    def _run(self,mode):
+        path=self.dir/'journal.json'
+        journal=json.loads(path.read_text('utf-8')) if path.exists() else {}
+        mutating=mode in ('install','update','repair')
+        pending=journal.get('status') in ('running','failed')
+        if mutating and pending and journal.get('phase')=='applying' and 'ai_address' in journal:
+            if (journal.get('install_ai'),journal['ai_address'])!=(self.c.get('install_ai',True),self.c['hosts']['ai']['address']):
+                raise ValueError('Finish the interrupted operation before changing AI settings.')
+        digest=self.release.digest if self.release else ''
+        switching=False
+        if mutating and pending:
+            if journal['mode']!=mode or journal['manifest']!=digest:
+                if journal.get('steps') or journal.get('phase')=='applying' or journal.get('inflight'):
+                    raise ValueError(tr('Есть незавершённая операция «{v0}» с начатыми серверными шагами. Продолжите её с исходным релизом; смена режима сейчас заблокирована.').format(v0=journal['mode']))
+                switching=True
+                self.log(tr('Проверю основной стек перед сменой режима незавершённой предварительной проверки. Старый журнал пока сохранён.'))
+            operation=journal['operation']
+        else: operation=uuid.uuid4().hex
+        if mutating and not switching:
+            # Carry an interrupted pre-0.1.12 AI transaction into its own journal,
+            # including when the user disables AI while finishing the core.
+            ai_path=self.dir/'ai-journal.json'
+            old_ai=[s for s in journal.get('steps',[]) if s.get('role')=='ai']
+            old_inflight=journal.get('inflight') or {}
+            if pending and not ai_path.exists() and (old_ai or old_inflight.get('role')=='ai'):
+                legacy_ai=dict(operation=operation,manifest=digest,version=self.release.version,status='failed',steps=old_ai)
+                if old_inflight.get('role')=='ai':legacy_ai['inflight']=old_inflight['action']
+                atomic_json(ai_path,legacy_ai)
+            journal=dict(journal if pending else {},operation=operation,mode=mode,manifest=digest,status='running',steps=journal.get('steps',[]) if pending else [],phase=journal.get('phase','unknown') if pending else 'preflight',install_ai=self.c.get('install_ai',True),ai_address=self.c['hosts']['ai']['address'])
+            atomic_json(path,journal)
+        preflight_complete=False
+        applying=False
+        try:
+            # Check every machine before staging credentials or doing installation work.
+            statuses={}
+            for role in core_roles(self.c):
+                self.log(tr('{v0}: проверка SSH и прав').format(v0=role))
+                r=self.factory(role,self.c['hosts'][role],self.vault.data.get('ssh',{}).get(role,{}),self.log)
+                r.diagnostics=self.diagnostics
+                self.remotes[role]=r; info=r.probe()
+                if getattr(self.release,'offline',False):self.release.select_platform(role,info['os'])
+                if info['free']<8*1024**3: raise RuntimeError(f'{role}: need at least 8 GiB free before staging')
+                r.prepare_stage()
+                for name in (('worker.ps1','worker-service-runner.py') if role.startswith('worker') else ('linux.py','app.env.in','worker-grants.sql')):
+                    r.put_bytes(name,(RESOURCES/name).read_bytes())
+                result=r.action(self.payload(role,operation,mode),'preflight',RESOURCES)
+                statuses[role]=result; self.log(tr('{v0}: проверка пройдена').format(v0=role))
+            preflight_complete=True
+            if switching:
+                # A rejected Install on an existing stack is only a preflight.
+                # Permit Update after every host explicitly confirms a committed,
+                # consistent release and no outstanding remote operation.
+                committed_update=(mode in ('update','repair') and journal.get('phase')=='preflight'
+                    and all(s.get('managed') and s.get('version') in self.release.allowed_from+[self.release.version]
+                            and s.get('operation')=='' and s.get('manifest') for s in statuses.values())
+                    and len({(s['version'],s['manifest']) for s in statuses.values()})==1)
+                if any(s.get('managed') or s.get('version') for s in statuses.values()) and not committed_update:
+                    raise RuntimeError(tr('На одной из VM есть состояние установки. Смена режима небезопасна: продолжите исходную операцию с исходным релизом. Журнал сохранён.'))
+                atomic_json(self.dir/'history'/('journal-'+journal['operation']+'.json'),journal)
+                operation=uuid.uuid4().hex
+                journal=dict(operation=operation,mode=mode,manifest=digest,status='running',steps=[],phase='preflight',install_ai=self.c.get('install_ai',True),ai_address=self.c['hosts']['ai']['address'])
+                atomic_json(path,journal);switching=False;pending=False
+                self.log(tr('Предыдущая попытка остановилась до изменений. Все серверы подтвердили завершённую установку; обновление разрешено. Журнал проверки сохранён в history.') if committed_update else tr('Основной стек подтвердил отсутствие установки Manager. Предыдущий журнал сохранён в history; выбранный режим разрешён.'))
+            if mode=='repair':
+                if not all(s.get('managed') and s.get('version')==self.release.version and s.get('manifest')==digest for s in statuses.values()):
+                    raise RuntimeError(tr('Для восстановления выберите точный установленный релиз и исходную площадку.'))
+            if mode=='update':
+                for role,s in statuses.items():
+                    if not s.get('managed'): raise RuntimeError(tr('{v0}: установка Manager не найдена. Для первичного развёртывания выберите «Установить» с релизом v0.2. Обновление доступно после завершения установки.').format(v0=role))
+                    if s.get('version') not in self.release.allowed_from+[self.release.version]: raise RuntimeError(f'{role}: unsupported upgrade source')
+            if mode=='install' and any(s.get('version') for s in statuses.values()) and (not pending or journal.get('phase')=='preflight'):
+                raise RuntimeError(tr('Установка уже существует. Выберите «Обновить»: текущая проверка не изменяла серверы.'))
+            if mode=='backup' and not all(s.get('managed') for s in statuses.values()):
+                raise RuntimeError(tr('Резервное копирование доступно после установки Manager на App, DB и выбранных Workers. Сначала завершите «Установить».'))
+            if mutating:
+                for role,r in self.remotes.items():
+                    for f in self.release.for_role(role).values(): r.put(f)
+            for role,action in plan(mode,False,worker_roles(self.c))[len(core_roles(self.c)):]:
+                self.log(f'{role}: {action}')
+                if mutating:
+                    applying=True;journal['phase']='applying';journal['inflight']={'role':role,'action':action}
+                    atomic_json(path,journal)
+                if mode=='status' and not statuses[role].get('managed'):
+                    result={'managed':False,'version':'','status':'not_installed_by_manager'}
+                    self.log(tr('{v0}: установка Manager не найдена — доступен режим «Установить».').format(v0=role))
+                else:result=self.remotes[role].action(self.payload(role,operation,mode),action,RESOURCES)
+                event={'time':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),'role':role,'action':action,'result':result}
+                self.report.append(event)
+                if mutating:
+                    journal['steps'].append(event);journal.pop('inflight',None); atomic_json(path,journal)
+                self.log(f'{role}: {action} — OK')
+            if mutating:
+                journal['status']='complete'; atomic_json(path,journal)
+            core_report={'mode':mode,'operation':operation,'hosts':statuses,'steps':list(self.report),'status':'complete','core_status':'complete'}
+            atomic_json(self.dir/('report-'+operation+'.json'),core_report)
+            if 'tls' in self.vault.data:
+                (self.dir/'prodcast-ca.crt').write_text(self.vault.data['tls']['ca.crt'],encoding='ascii')
+            self.log(tr('Основной стек: успешно. App, DB и Workers проверены; результат сохранён.') if mutating else tr('Операция для App, DB и Workers завершена; результат сохранён.'))
+            # Core is durably complete before any AI connection, upload or check.
+            try:optional=self._optional_ai(mode,operation)
+            except Exception as error:
+                optional={'status':'warning','error':str(error)}
+                self.log(tr('ПРЕДУПРЕЖДЕНИЕ AI: ')+str(error))
+            core_report['ai']=optional
+            try:atomic_json(self.dir/('report-'+operation+'.json'),core_report)
+            except OSError:self.log(tr('Не удалось дополнить отчёт результатом AI. Успешный журнал основного стека сохранён.'))
+            label={'complete':tr('успешно'),'disabled':tr('отключён'),'warning':tr('требует внимания'),'checked':tr('проверен'),'not_installed':tr('не установлен')}.get(optional['status'],optional['status'])
+            self.log(tr('Готово. Основной стек: успешно. AI: ')+label+'.')
+            return self.report
+        except Exception:
+            if mutating and not switching:
+                journal['status']='failed'; atomic_json(path,journal)
+            atomic_json(self.dir/('report-'+operation+'.json'),{'mode':mode,'operation':operation,'steps':self.report,'status':'failed'})
+            if not applying:
+                self.log(tr('Предварительная проверка остановлена. Основные шаги установки/обновления этого запуска ещё не выполнялись. Сохраните vault и журнал, устраните причину и повторите ту же операцию.'))
+            else:
+                self.log(tr('Операция остановлена. Не удаляйте vault и журнал. Повторите ту же операцию после устранения причины; откат БД автоматически не выполняется.'))
+            raise
+        finally:
+            for r in self.remotes.values():
+                try: r.cleanup()
+                except Exception: self.log(tr('Не удалось очистить временный inbox на одном из серверов; удалите его после проверки операции.'))
+                finally:
+                    try:r.close()
+                    except Exception:pass
+
+    def _optional_ai(self,mode,core_operation):
+        if not self.c.get('install_ai',True):
+            self.log(tr('AI отключён: подключение, установка и проверки пропущены. Существующие службы AI не удаляются.'))
+            return {'status':'disabled'}
+        path=self.dir/'ai-journal.json';journal={};remote=None;app_remote=None
+        mutating=mode in ('install','update','repair')
+        try:
+            journal=json.loads(path.read_text('utf-8')) if path.exists() else {}
+            pending=journal.get('status') in ('running','failed')
+            if mutating and pending and journal.get('ai_address',self.c['hosts']['ai']['address'])!=self.c['hosts']['ai']['address']:
+                raise ValueError('AI: resume the interrupted AI operation with its original VM address first.')
+            if mutating and pending and journal.get('manifest')!=self.release.digest:
+                if journal.get('steps') or journal.get('inflight'):
+                    raise ValueError(tr('AI: сначала повторите незавершённый этап AI с исходным релизом через «Повторить AI». Основной стек уже готов.'))
+                pending=False
+            operation=journal['operation'] if pending else core_operation
+            if mutating:
+                journal=dict(journal if pending else {},operation=operation,manifest=self.release.digest,version=self.release.version,status='running',ai_address=self.c['hosts']['ai']['address'],steps=journal.get('steps',[]) if pending else [])
+                atomic_json(path,journal)
+                files=self.release.for_role('ai')  # Validate optional assets only here.
+            host=self.c['hosts']['ai']
+            import ipaddress,re
+            if any(ipaddress.ip_address(host['address']) in ipaddress.ip_network(n) for n in ('192.0.2.0/24','198.51.100.0/24','203.0.113.0/24')) or not re.fullmatch(r'SHA256:[A-Za-z0-9+/]{43}',host.get('fingerprint','')):
+                raise ValueError(tr('Укажите адрес AI и подтвердите его SSH-отпечаток на вкладке серверов.'))
+            self.log(tr('AI: отдельный заключительный этап; ошибки не изменяют успех основного стека.'))
+            remote=self.factory('ai',host,self.vault.data.get('ssh',{}).get('ai',{}),self.log)
+            remote.diagnostics=self.diagnostics
+            info=remote.probe()
+            if getattr(self.release,'offline',False):
+                self.release.select_platform('ai',info['os']);files=self.release.for_role('ai')
+            needed=20 if getattr(self.release,'offline',False) else 8
+            if info['free']<needed*1024**3:raise RuntimeError(f'AI: need at least {needed} GiB free before staging')
+            remote.prepare_stage();remote.put_bytes('linux.py',(RESOURCES/'linux.py').read_bytes())
+            # Probe without update assumptions; an optional AI may not exist yet.
+            status=remote.action(self.payload('ai',operation,'check'),'preflight',RESOURCES)
+            if not mutating:
+                if mode=='check':return {'status':'checked'}
+                result=remote.action(self.payload('ai',operation,mode),mode,RESOURCES) if status.get('managed') else {'managed':False,'status':'not_installed_by_manager'}
+                self.report.append({'role':'ai','action':mode,'result':result})
+                return {'status':'complete' if status.get('managed') else 'not_installed','result':result}
+            if status.get('version') and status['version'] not in self.release.allowed_from+[self.release.version]:raise ValueError('AI: unsupported upgrade source')
+            if mode=='repair' and (status.get('version')!=self.release.version or status.get('manifest')!=self.release.digest):
+                raise ValueError('AI: recovery requires its exact installed release. Use Retry AI to finish an incomplete installation.')
+            ai_mode='repair' if mode=='repair' else ('update' if status.get('version') else 'install')
+            payload=self.payload('ai',operation,ai_mode)
+            remote.action(payload,'preflight',RESOURCES)  # Ownership and pending-operation guards.
+            for file in files.values():remote.put(file)
+            actions=['claim','bootstrap','repair'] if mode=='repair' else ['claim','bootstrap']+(['backup'] if status.get('version') else [])+['install']
+            for action in actions:
+                journal['inflight']=action;atomic_json(path,journal);self.log('ai: '+action)
+                result=remote.action(payload,action,RESOURCES)
+                journal['steps'].append({'action':action,'result':result});journal.pop('inflight',None);atomic_json(path,journal)
+                self.log('ai: '+action+' — OK')
+            journal['inflight']='verify-from-app';atomic_json(path,journal)
+            app_remote=self.factory('app',self.c['hosts']['app'],self.vault.data.get('ssh',{}).get('app',{}),self.log)
+            app_remote.diagnostics=self.diagnostics;app_remote.prepare_stage()
+            app_remote.put_bytes('linux.py',(RESOURCES/'linux.py').read_bytes())
+            result=app_remote.action(self.payload('app',operation,'check'),'verify-ai',RESOURCES)
+            remote.action(payload,'commit',RESOURCES)
+            journal.update(status='complete',result=result);journal.pop('inflight',None);atomic_json(path,journal)
+            self.log(tr('AI: установка и проверка ответа из App завершены успешно.'))
+            return {'status':'complete','result':result}
+        except Exception as error:
+            # Do not expose arbitrary SSH/package output; Remote already sanitizes it.
+            if mutating and journal.get('status')=='running':
+                journal.update(status='failed',error=str(error))
+                try:atomic_json(path,journal)
+                except OSError:self.log(tr('AI: не удалось записать отдельный журнал; журнал основного стека сохранён.'))
+            self.log(tr('ПРЕДУПРЕЖДЕНИЕ AI: ')+str(error))
+            self.log(tr('Основной стек остаётся успешно развёрнутым. AI можно повторить отдельно с тем же релизом.'))
+            return {'status':'warning','error':str(error)}
+        finally:
+            for r in (app_remote,remote):
+                if r:
+                    try:r.cleanup()
+                    except Exception:self.log(tr('AI: временный каталог не удалось очистить; основной стек не затронут.'))
+                    try:r.close()
+                    except Exception:pass
