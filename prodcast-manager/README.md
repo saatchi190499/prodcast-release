@@ -1,10 +1,8 @@
-# ProdCast Manager 0.5
+# ProdCast Manager 0.6
 
 Windows application for installing and updating ProdCast through SSH.
 
-This directory contains the exact contents of `source.zip` shipped with `ProdCast-Manager-0.5.zip`, with this README added for repository navigation.
-
-Source archive SHA-256: `366ef5bdbcb03ddfb0797b0403677f2686a7202196ced3af7e50ccbcd7fbfbb7`.
+This directory contains the source, tests, resources, and Windows build definition for the standalone ProdCast Manager executable.
 
 ## Documentation
 
@@ -23,7 +21,7 @@ python -m venv .venv
 .\build.ps1 -Python .\.venv\Scripts\python.exe
 ```
 
-The build script runs tests, builds GUI and CLI executables, and checks packaged resources and GUI initialization. Output is written to `dist/`.
+The build script runs tests, builds single-file GUI and CLI executables, and checks packaged resources and GUI initialization. Output is written to `dist/`.
 
 To run from source:
 
