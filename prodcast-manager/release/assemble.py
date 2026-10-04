@@ -94,6 +94,21 @@ def manager_file(name: str) -> bool:
     return name.lower().startswith("prodcast-manager-")
 
 
+def declared_external_payloads(manifest: dict) -> set[str]:
+    """Return only payload names whose bytes are explicitly stored outside Complete."""
+    offline = manifest.get("management", {}).get("offline", {})
+    names: set[str] = set()
+    if offline.get("external_ollama"):
+        for key in ("ollama_runtime", "model_archive"):
+            value = offline.get(key)
+            if isinstance(value, str):
+                names.add(value)
+    external_model = offline.get("external_model")
+    if isinstance(external_model, dict) and isinstance(external_model.get("name"), str):
+        names.add(external_model["name"])
+    return names
+
+
 def contribution(descriptor_path: Path, archive_path: Path, component: str) -> tuple[dict, Path]:
     descriptor = json.loads(Path(descriptor_path).read_text(encoding="utf-8"))
     if descriptor.get("component") != component or descriptor.get("repository") != f"saatchi190499/prodcast-{component}":
@@ -146,14 +161,20 @@ def build(version: str, base_archive: Path, descriptors: dict[str, Path], archiv
     base_version = manifest.get("version")
 
     controls = {"release-manifest.json", "release-manifest.json.sha256", "SHA256SUMS"}
+    declared_external = declared_external_payloads(manifest)
     for item in manifest["artifacts"]:
-        if item.get("location", "complete") == "complete":
+        path = contents / validate_name(str(item["name"]))
+        if item["name"] in declared_external or item.get("location", "complete") != "complete":
+            continue
+        if not path.is_file():
+            raise ValueError(f"Required Complete artifact is missing: {path.name}")
+        else:
             verify(contents, item)
 
     components = {item["component"]: copy.deepcopy(item) for item in manifest["components"]}
     if not {"app", "agent", "worker"} <= components.keys():
         raise ValueError("Base release is missing a required component")
-    external = [copy.deepcopy(item) for item in manifest["artifacts"] if item.get("location", "complete") != "complete" and not component_file("agent", str(item["name"])) and not manager_file(str(item["name"]))]
+    external = [copy.deepcopy(item) for item in manifest["artifacts"] if (item.get("location", "complete") != "complete" or item["name"] in declared_external) and not component_file("agent", str(item["name"])) and not manager_file(str(item["name"]))]
 
     for old in list(contents.iterdir()):
         if component_file("agent", old.name) or manager_file(old.name):

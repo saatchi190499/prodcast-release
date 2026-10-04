@@ -30,7 +30,8 @@ def base(root):
     folder.mkdir()
     for name in ("prodcast-backend-v0.5.0-linux-amd64.tar.gz", "prodcast-worker-v0.5.0-windows-amd64.zip", "ProdCastAgent-Setup-v0.5.0.exe", "ProdCast-Manager-0.5.zip", "offline-database-images.tar"):
         (folder / name).write_bytes(name.encode())
-    manifest = {"version": "v0.5.0", "management": {"schema": 3, "recommended_manager": "0.5"}, "components": [{"component": name, "source_commit": "b" * 40, "binary_version": "v0.5.0"} for name in ("app", "agent", "worker", "ai", "license")], "artifacts": [record(path, location="complete") for path in sorted(folder.iterdir())]}
+    external = {"name": "offline-ollama.tar.xz", "bytes": 123, "sha256": "c" * 64}
+    manifest = {"version": "v0.5.0", "management": {"schema": 3, "recommended_manager": "0.5", "offline": {"external_ollama": {"name": "ollama-components.zip"}, "ollama_runtime": external["name"], "model_archive": "ollama-model-metadata.tar"}}, "components": [{"component": name, "source_commit": "b" * 40, "binary_version": "v0.5.0"} for name in ("app", "agent", "worker", "ai", "license")], "artifacts": [record(path, location="complete") for path in sorted(folder.iterdir())] + [external]}
     write_json(folder / "release-manifest.json", manifest)
     archive = root / "base.zip"
     pack(folder, archive, [path.name for path in folder.iterdir()])
@@ -53,6 +54,7 @@ def test_complete_excludes_agent_and_manager_executables(tmp_path):
         assert not any(name.lower().startswith("prodcast-manager-") for name in names)
         assert "prodcast-worker-v0.6.0-windows-amd64.zip" in names
         manifest = json.loads(archive.read("release-manifest.json"))
-    external = {item["name"] for item in manifest["artifacts"] if item["location"] == "release-asset"}
+    external = {item["name"] for item in manifest["artifacts"] if item.get("location") == "release-asset"}
     assert external == {"ProdCastAgent-Setup-v0.6.0.exe", "ProdCast-Manager-v0.6.0.exe"}
+    assert any(item["name"] == "offline-ollama.tar.xz" for item in manifest["artifacts"])
     assert assets["manager"].read_bytes() == b"manager"
