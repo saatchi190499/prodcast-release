@@ -5,16 +5,13 @@ if(-not $SkipTests){
     & $Python -m pytest (Join-Path $PSScriptRoot 'tests') -q
     if($LASTEXITCODE){throw 'Tests failed'}
 }
-$bundles=Join-Path $build 'portable-bundles'
-& $Python -m PyInstaller --noconfirm --clean --onedir --icon (Join-Path $PSScriptRoot "prodcast_manager/resources/prodcast-manager.ico") --name ProdCast-Manager --distpath $bundles --workpath (Join-Path $build 'gui') --specpath $build --windowed --paths $PSScriptRoot --add-data ((Join-Path $PSScriptRoot 'prodcast_manager\resources')+';prodcast_manager/resources') (Join-Path $PSScriptRoot 'manager.py')
+$bundles=Join-Path $build 'onefile'
+& $Python -m PyInstaller --noconfirm --clean --onefile --icon (Join-Path $PSScriptRoot "prodcast_manager/resources/prodcast-manager.ico") --name ProdCast-Manager --distpath $bundles --workpath (Join-Path $build 'gui') --specpath $build --windowed --paths $PSScriptRoot --add-data ((Join-Path $PSScriptRoot 'prodcast_manager\resources')+';prodcast_manager/resources') (Join-Path $PSScriptRoot 'manager.py')
 if($LASTEXITCODE){throw 'GUI build failed'}
-& $Python -m PyInstaller --noconfirm --clean --onedir --icon (Join-Path $PSScriptRoot "prodcast_manager/resources/prodcast-manager.ico") --name prodcast-manager-cli --distpath $bundles --workpath (Join-Path $build 'cli') --specpath $build --console --paths $PSScriptRoot --add-data ((Join-Path $PSScriptRoot 'prodcast_manager\resources')+';prodcast_manager/resources') (Join-Path $PSScriptRoot 'manager.py')
-if($LASTEXITCODE){throw 'CLI build failed'}
 New-Item -ItemType Directory -Path $Output -Force | Out-Null
-foreach($name in @('ProdCast-Manager','prodcast-manager-cli')) {
-    Get-ChildItem -LiteralPath (Join-Path $bundles $name) | Copy-Item -Destination $Output -Recurse -Force
-}
+Copy-Item -LiteralPath (Join-Path $bundles 'ProdCast-Manager.exe') -Destination (Join-Path $Output 'ProdCast-Manager.exe') -Force
+New-Item -ItemType Directory -Path (Join-Path $Output 'prodcast-data\logs'),(Join-Path $Output 'prodcast-data\sites') -Force | Out-Null
 if(-not $SkipSmoke){
-    & (Join-Path $Output 'prodcast-manager-cli.exe') self-test --gui-smoke
+    & (Join-Path $Output 'ProdCast-Manager.exe') self-test --gui-smoke
     if($LASTEXITCODE){throw 'Packaged resource smoke failed'}
 }

@@ -139,7 +139,7 @@ def test_gui_language_dynamic_workers_and_optional_ai_preserve_input(tmp_path):
         assert 'Install AI' in content and '4. Installation and updates' in content and 'Repair' in content
         assert not any(re.search('[А-Яа-я]',s) for s in content if s!='Language / Язык')
         assert app.hostvars['worker3']['address'].get()=='192.168.31.153'
-        assert json.loads((tmp_path/'manager/data/ui.json').read_text())['language']=='en'
+        assert json.loads((tmp_path/'manager/prodcast-data/ui.json').read_text())['language']=='en'
         app.install_ai.set(True)
         assert all(str(w.cget('state')) in ('normal','readonly') for w in app.ai_widgets)
         assert str(app.ai_model_entry.cget('state'))=='normal'

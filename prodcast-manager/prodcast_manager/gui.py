@@ -91,7 +91,9 @@ class App:
         self.root=root; self.events=queue.Queue(); self.busy=False; self.auth={}; self.vars={}; self.hostvars={}
         self.session_log=SessionLog(log_dir)
         self.home=Path(app_home) if app_home else application_directory()
-        preferences=self.home/'data/ui.json'
+        (self.home/'prodcast-data'/'logs').mkdir(parents=True,exist_ok=True)
+        (self.home/'prodcast-data'/'sites').mkdir(parents=True,exist_ok=True)
+        preferences=self.home/'prodcast-data/ui.json'
         try:chosen=json.loads(preferences.read_text('utf-8')).get('language','ru') if preferences.exists() else 'ru'
         except (OSError,ValueError):chosen='ru'
         set_language(chosen if chosen in ('ru','en') else 'ru')
@@ -216,7 +218,7 @@ class App:
             return
         chosen='en' if self.language_choice.get()=='English' else 'ru'
         set_language(chosen);localize(self.root)
-        atomic_json(self.home/'data/ui.json',{'language':chosen})
+        atomic_json(self.home/'prodcast-data/ui.json',{'language':chosen})
 
     def render_servers(self):
         for widget in self.hostframe.winfo_children():widget.destroy()
@@ -345,11 +347,11 @@ class App:
 
     def pick_directory(self):
         if self.busy:return
-        self.directory=self.home/'data'/'sites'/'new'
+        self.directory=self.home/'prodcast-data'/'sites'/'new'
         fresh=example();fresh['install_ai']=False;fresh['hosts']['ai']['address']=''
         self.populate(fresh);self.auth={};self.master.set('')
         self.pfx_password.set('');self.pfx_path.set('');self.pfx_url.set('');self.pfx_ca.set('')
-        self.show_certificate(None);self.dirlabel.config(text=tr('Новая площадка — будет сохранена в data/sites рядом с Manager'))
+        self.show_certificate(None);self.dirlabel.config(text=tr('Новая площадка — будет сохранена в prodcast-data/sites рядом с Manager'))
         self.log(tr('Новая площадка: введите адреса и SSH-доступ. Данные прежней площадки сохранены.'))
 
     def load(self):
@@ -605,8 +607,8 @@ class App:
                     if again!=password:raise ValueError(tr('Пароли не совпадают.'))
             if mode=='import':
                 import uuid
-                destination=self.home/'data/sites'/('recovered-'+uuid.uuid4().hex[:12])
-                c=import_backup_profile(path,password,self.home/'data/temporary',destination)
+                destination=self.home/'prodcast-data/sites'/('recovered-'+uuid.uuid4().hex[:12])
+                c=import_backup_profile(path,password,self.home/'prodcast-data/temporary',destination)
                 self.directory=destination;self.populate(c);self.auth={};self.master.set('');self.dirlabel.config(text=str(destination));remember(self.home,destination)
                 self.show_certificate(None)
                 self.log(tr('Профиль восстановлен. Укажите SSH-доступ. Для чистых VM сначала установите исходный релиз, затем восстановите данные из бэкапа.'));return

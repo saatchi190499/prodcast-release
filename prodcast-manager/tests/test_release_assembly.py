@@ -3,12 +3,22 @@ from pathlib import Path
 import sys
 import zipfile
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "release"))
 from assemble import build, pack, record, sha256, write_json
 
 
-COMMIT = "a" * 40
-RC = "v0.6.0-rc.1"
+VERSION = "v0.6.1"
+COMMITS = {name: character * 40 for name, character in zip(("app", "agent", "worker", "ai", "release"), "abcde")}
+REPOSITORIES = {name: f"saatchi190499/prodcast-{name}" for name in ("app", "agent", "worker", "ai")}
+
+
+def checksum(folder):
+    (folder / "SHA256SUMS").write_text(
+        "".join(f"{sha256(path)}  {path.name}\n" for path in sorted(folder.iterdir()) if path.name != "SHA256SUMS"),
+        encoding="utf-8",
+    )
 
 
 def payload(root, component, names):
@@ -16,51 +26,110 @@ def payload(root, component, names):
     folder.mkdir()
     for name in names:
         (folder / name).write_bytes((component + name).encode())
-    write_json(folder / "release-manifest.json", {"repository": f"saatchi190499/prodcast-{component}", "version": RC, "source_commit": COMMIT, "artifacts": [record(path) for path in sorted(folder.iterdir())]})
-    (folder / "SHA256SUMS").write_text("checksums")
-    archive = root / f"prodcast-{component}-{RC}-component.zip"
-    pack(folder, archive, [path.name for path in folder.iterdir()])
-    descriptor = root / f"prodcast-{component}-{RC}-component.json"
-    write_json(descriptor, {"component": component, "repository": f"saatchi190499/prodcast-{component}", "version": RC, "source_commit": COMMIT, "archive": record(archive), "build_manifest_sha256": sha256(folder / "release-manifest.json")})
-    return descriptor, archive
+    write_json(
+        folder / "release-manifest.json",
+        {
+            "repository": REPOSITORIES[component],
+            "version": VERSION,
+            "status": "stable",
+            "source_commit": COMMITS[component],
+            "artifacts": [record(path) for path in sorted(folder.iterdir())],
+        },
+    )
+    checksum(folder)
+    return folder
 
 
 def base(root):
     folder = root / "base"
     folder.mkdir()
-    for name in ("prodcast-backend-v0.5.0-linux-amd64.tar.gz", "prodcast-worker-v0.5.0-windows-amd64.zip", "ProdCastAgent-Setup-v0.5.0.exe", "ProdCast-Manager-0.5.zip", "offline-database-images.tar"):
+    for name in (
+        "prodcast-backend-v0.6.0-linux-amd64.tar.gz",
+        "prodcast-worker-v0.6.0-windows-amd64.zip",
+        "prodcast-ai-v0.6.0-linux-amd64.tar.gz",
+        "ProdCastAgent-Setup-v0.6.0.exe",
+        "ProdCast-Manager-v0.6.0.exe",
+        "offline-database-images.tar",
+    ):
         (folder / name).write_bytes(name.encode())
-    external = {"name": "offline-ollama.tar.xz", "bytes": 123, "sha256": "c" * 64}
-    manifest = {"version": "v0.5.0", "management": {"schema": 3, "recommended_manager": "0.5", "offline": {"external_ollama": {"name": "ollama-components.zip"}, "ollama_runtime": external["name"], "model_archive": "ollama-model-metadata.tar"}}, "components": [{"component": name, "source_commit": "b" * 40, "binary_version": "v0.5.0"} for name in ("app", "agent", "worker", "ai", "license")], "artifacts": [record(path, location="complete") for path in sorted(folder.iterdir())] + [external]}
+    external = {"name": "offline-ollama.tar.xz", "bytes": 123, "sha256": "c" * 64, "location": "release-asset"}
+    manifest = {
+        "version": "v0.6.0",
+        "management": {"schema": 3, "recommended_manager": "0.6.0", "upgrade_from": ["v0.5.0"]},
+        "components": [{"component": name, "source_commit": "f" * 40, "binary_version": "v0.6.0"} for name in ("app", "agent", "worker", "ai", "license")],
+        "artifacts": [record(path, location="complete") for path in sorted(folder.iterdir())] + [external],
+    }
     write_json(folder / "release-manifest.json", manifest)
+    checksum(folder)
     archive = root / "base.zip"
     pack(folder, archive, [path.name for path in folder.iterdir()])
     return archive
 
 
-def test_complete_excludes_agent_and_manager_executables(tmp_path):
-    descriptors = {}
-    archives = {}
-    descriptors["app"], archives["app"] = payload(tmp_path, "app", [f"prodcast-backend-{RC}-linux-amd64.tar.gz"])
-    descriptors["worker"], archives["worker"] = payload(tmp_path, "worker", [f"prodcast-worker-{RC}-windows-amd64.zip"])
-    descriptors["agent"], archives["agent"] = payload(tmp_path, "agent", [f"ProdCastAgent-Setup-{RC}.exe", "workflow-agent-sbom.cdx.json"])
+def snapshot(root):
+    path = root / "source-snapshot.json"
+    write_json(
+        path,
+        {
+            "release_version": VERSION,
+            "base_release": {"tag": "v0.6.0", "asset": "ProdCast-v0.6.0-complete.zip"},
+            "components": {
+                name: {"repository": "saatchi190499/prodcast-release" if name == "release" else REPOSITORIES[name], "source_commit": commit}
+                for name, commit in COMMITS.items()
+            },
+        },
+    )
+    return path
+
+
+def inputs(root):
+    return {
+        "app": payload(root, "app", [f"prodcast-backend-{VERSION}-linux-amd64.tar.gz", f"prodcast-app-{VERSION}-deployment.tar.gz"]),
+        "agent": payload(root, "agent", [f"ProdCastAgent-Setup-{VERSION}.exe", "workflow-agent-sbom.cdx.json"]),
+        "worker": payload(root, "worker", [f"prodcast-worker-{VERSION}-windows-amd64.zip"]),
+        "ai": payload(root, "ai", [f"prodcast-ai-{VERSION}-linux-amd64.tar.gz", f"prodcast-ai-{VERSION}-deployment.tar.gz"]),
+    }
+
+
+def test_complete_uses_fresh_payloads_and_excludes_standalone_executables(tmp_path):
+    payloads = inputs(tmp_path)
     manager = tmp_path / "ProdCast-Manager.exe"
     manager.write_bytes(b"manager")
-    assets = build(
-        "v0.6.0", base(tmp_path), descriptors, archives, manager, tmp_path / "out",
-        ["v0.5.0-rc.2", "v0.5.0"],
-    )
+    assets = build(VERSION, base(tmp_path), payloads, manager, snapshot(tmp_path), tmp_path / "out")
     with zipfile.ZipFile(assets["complete"]) as archive:
-        names = archive.namelist()
+        names = set(archive.namelist())
         assert not any(name.lower().endswith(".exe") for name in names)
-        assert not any(name.startswith("ProdCastAgent-") for name in names)
-        assert not any(name.lower().startswith("prodcast-manager-") for name in names)
-        assert "prodcast-worker-v0.6.0-windows-amd64.zip" in names
+        assert f"prodcast-worker-{VERSION}-windows-amd64.zip" in names
+        assert f"prodcast-ai-{VERSION}-linux-amd64.tar.gz" in names
+        assert "offline-database-images.tar" in names
         manifest = json.loads(archive.read("release-manifest.json"))
-    external = {item["name"] for item in manifest["artifacts"] if item.get("location") == "release-asset"}
-    assert external == {"ProdCastAgent-Setup-v0.6.0.exe", "ProdCast-Manager-v0.6.0.exe"}
-    assert any(item["name"] == "offline-ollama.tar.xz" for item in manifest["artifacts"])
-    assert {"v0.5.0-rc.2", "v0.5.0"} <= set(manifest["management"]["upgrade_from"])
-    worker = next(item for item in manifest["components"] if item["component"] == "worker")
-    assert worker["binary_version"] == RC
+    assert {item["component"] for item in manifest["components"]} >= {"app", "agent", "worker", "ai", "manager"}
+    for component in ("app", "agent", "worker", "ai"):
+        item = next(value for value in manifest["components"] if value["component"] == component)
+        assert item["source_commit"] == COMMITS[component]
+        assert item["release_tag"] == VERSION
+        assert item["binary_version"] == VERSION
     assert assets["manager"].read_bytes() == b"manager"
+    assert sha256(assets["manifest"]) in assets["manifest_checksum"].read_text()
+
+
+def test_provenance_mismatch_fails_closed(tmp_path):
+    payloads = inputs(tmp_path)
+    path = payloads["worker"] / "release-manifest.json"
+    data = json.loads(path.read_text())
+    data["source_commit"] = "0" * 40
+    write_json(path, data)
+    checksum(payloads["worker"])
+    manager = tmp_path / "manager.exe"
+    manager.write_bytes(b"manager")
+    with pytest.raises(ValueError, match="worker source_commit mismatch"):
+        build(VERSION, base(tmp_path), payloads, manager, snapshot(tmp_path), tmp_path / "out")
+
+
+def test_unexpected_component_file_is_rejected(tmp_path):
+    payloads = inputs(tmp_path)
+    (payloads["ai"] / "secret.env").write_text("secret")
+    manager = tmp_path / "manager.exe"
+    manager.write_bytes(b"manager")
+    with pytest.raises(ValueError, match="Unexpected files in ai payload"):
+        build(VERSION, base(tmp_path), payloads, manager, snapshot(tmp_path), tmp_path / "out")

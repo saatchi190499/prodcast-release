@@ -23,7 +23,7 @@ def profile_directory(home, config):
         endpoints={r:a for r,a in endpoints.items() if not r.startswith('worker')}
         endpoints.update(config['_worker_topology_hosts'])
     key = hashlib.sha256(json.dumps(endpoints, sort_keys=True).encode()).hexdigest()[:12]
-    return Path(home) / 'data' / 'sites' / (config['site_id'] + '-' + key)
+    return Path(home) / 'prodcast-data' / 'sites' / (config['site_id'] + '-' + key)
 
 
 def runtime_config(path):
@@ -67,11 +67,11 @@ def import_site(path, home):
     path = Path(path).resolve()
     config = runtime_config(path)
     home = Path(home).resolve()
-    if path.is_relative_to(home / 'data' / 'sites'):
+    if path.is_relative_to(home / 'prodcast-data' / 'sites'):
         return path.parent, config
     destination = profile_directory(home, config)
     if destination.exists():
-        raise ValueError(tr('Эта площадка уже есть в data/sites. Откройте её site.json из папки Manager.'))
+        raise ValueError(tr('Эта площадка уже есть в prodcast-data/sites. Откройте её site.json из папки Manager.'))
     destination.parent.mkdir(parents=True, exist_ok=True)
     staging = destination.with_name(destination.name + '.import-' + uuid.uuid4().hex)
     staging.mkdir()
@@ -121,15 +121,15 @@ def open_credentials(directory, legacy_password=''):
 
 def remember(home, directory):
     home = Path(home).resolve()
-    atomic_json(home / 'data' / 'manager.json', {'site': str(Path(directory).resolve().relative_to(home))})
+    atomic_json(home / 'prodcast-data' / 'manager.json', {'site': str(Path(directory).resolve().relative_to(home))})
 
 
 def last_directory(home):
     home = Path(home).resolve()
-    path = home / 'data' / 'manager.json'
+    path = home / 'prodcast-data' / 'manager.json'
     if path.exists():
         directory = (home / json.loads(path.read_text('utf-8'))['site']).resolve()
-        if not directory.is_relative_to(home / 'data' / 'sites'):
+        if not directory.is_relative_to(home / 'prodcast-data' / 'sites'):
             raise ValueError(tr('Путь площадки выходит за пределы portable-папки'))
         return directory
-    return home / 'data' / 'sites' / 'new'
+    return home / 'prodcast-data' / 'sites' / 'new'

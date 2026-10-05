@@ -10,7 +10,7 @@ def test_logs_follow_executable_not_extraction_dir(tmp_path,monkeypatch):
     monkeypatch.setattr(sys,'executable',str(tmp_path/'Manager.exe'))
     monkeypatch.setattr(sys,'_MEIPASS',str(tmp_path/'unpack'),raising=False)
     log=SessionLog();log.append('Ошибка AI')
-    assert log.directory==tmp_path/'logs'
+    assert log.directory==tmp_path/'prodcast-data'/'logs'
     assert 'Ошибка AI' in log.path.read_text('utf-8')
 
 def test_secrets_redacted_in_both_local_logs(tmp_path):

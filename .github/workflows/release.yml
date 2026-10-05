@@ -4,84 +4,425 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Stable release version (vX.Y.Z)
+        description: Stable release version (vMAJOR.MINOR.PATCH)
         required: true
-        default: v0.6.0
-      component_tag:
-        description: Matching App and Agent candidate tag
-        required: true
-        default: v0.6.1-rc.1
-      worker_tag:
-        description: Exact tested Worker candidate tag (may differ from App and Agent)
-        required: true
-        default: v0.6.0-rc.2
-      upgrade_from:
-        description: Comma-separated exact versions accepted for upgrade (include the v prefix)
-        required: true
-        default: v0.5.0-rc.2,v0.5.0
-      base_tag:
-        description: Published base release tag
-        required: true
-        default: v0.5
-      base_archive:
-        description: Complete archive asset in the base release
-        required: true
-        default: ProdCast-v0.5.0-complete.zip
+        type: string
+      base_release:
+        description: Optional stable offline-base tag (automatic when empty)
+        required: false
+        type: string
+      build_only:
+        description: Build and validate without creating a draft, tags, or release
+        required: false
+        default: false
+        type: boolean
 
 permissions:
-  contents: write
+  contents: read
+  actions: read
 
 concurrency:
   group: prodcast-release-${{ inputs.version }}
   cancel-in-progress: false
 
+env:
+  RELEASE_VERSION: ${{ inputs.version }}
+  PYTHON_VERSION: '3.14.7'
+  PRODCAST_RELEASE_APP_ID: ${{ secrets.PRODCAST_RELEASE_APP_ID }}
+
 jobs:
-  manager:
-    runs-on: windows-2025
-    timeout-minutes: 60
+  resolve:
+    name: Freeze source snapshot
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      app_sha: ${{ steps.snapshot.outputs.app_sha }}
+      agent_sha: ${{ steps.snapshot.outputs.agent_sha }}
+      worker_sha: ${{ steps.snapshot.outputs.worker_sha }}
+      ai_sha: ${{ steps.snapshot.outputs.ai_sha }}
+      release_sha: ${{ steps.snapshot.outputs.release_sha }}
+      base_tag: ${{ steps.snapshot.outputs.base_tag }}
+      base_asset: ${{ steps.snapshot.outputs.base_asset }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/create-github-app-token@v2
+        if: env.PRODCAST_RELEASE_APP_ID != ''
+        id: release-token
+        with:
+          app-id: ${{ env.PRODCAST_RELEASE_APP_ID }}
+          private-key: ${{ secrets.PRODCAST_RELEASE_APP_PRIVATE_KEY }}
+          owner: saatchi190499
+          repositories: prodcast-release,prodcast-app,prodcast-agent,prodcast-worker,prodcast-ai
+      - name: Resolve HEADs once, validate version/tags/release, and check CI
+        id: snapshot
+        env:
+          PRODCAST_RELEASE_TOKEN: ${{ steps.release-token.outputs.token || secrets.PRODCAST_RELEASE_TOKEN }}
+        run: >-
+          python prodcast-manager/release/release_sources.py resolve
+          --version "$RELEASE_VERSION"
+          --base-tag "${{ inputs.base_release }}"
+          --output source-snapshot.json
+      - name: Upload immutable source plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-snapshot
+          path: source-snapshot.json
+          if-no-files-found: error
+          retention-days: 30
+
+  app:
+    name: Build App
+    needs: resolve
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/create-github-app-token@v2
+        if: env.PRODCAST_RELEASE_APP_ID != ''
+        id: release-token
+        with:
+          app-id: ${{ env.PRODCAST_RELEASE_APP_ID }}
+          private-key: ${{ secrets.PRODCAST_RELEASE_APP_PRIVATE_KEY }}
+          owner: saatchi190499
+          repositories: prodcast-release,prodcast-app,prodcast-agent,prodcast-worker,prodcast-ai
+      - uses: actions/checkout@v4
+        with:
+          repository: saatchi190499/prodcast-app
+          ref: ${{ needs.resolve.outputs.app_sha }}
+          token: ${{ steps.release-token.outputs.token || secrets.PRODCAST_RELEASE_TOKEN }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+      - name: Test existing release tooling
+        run: |
+          python -m pip install Django==5.2.17
+          python -m unittest discover -s release -p 'test_*.py'
+      - name: Build App images and deployment payload
+        env:
+          PRODCAST_RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
+          PRODCAST_SOURCE_REPOSITORY: saatchi190499/prodcast-app
+          PRODCAST_PUBLISH_IMAGES: 'false'
+        run: python release/build_linux.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-payload
+          path: dist/release/*
+          if-no-files-found: error
+          compression-level: 0
+
+  agent:
+    name: Build Agent
+    needs: resolve
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - uses: actions/create-github-app-token@v2
+        if: env.PRODCAST_RELEASE_APP_ID != ''
+        id: release-token
+        with:
+          app-id: ${{ env.PRODCAST_RELEASE_APP_ID }}
+          private-key: ${{ secrets.PRODCAST_RELEASE_APP_PRIVATE_KEY }}
+          owner: saatchi190499
+          repositories: prodcast-release,prodcast-app,prodcast-agent,prodcast-worker,prodcast-ai
+      - uses: actions/checkout@v4
+        with:
+          repository: saatchi190499/prodcast-agent
+          ref: ${{ needs.resolve.outputs.agent_sha }}
+          token: ${{ steps.release-token.outputs.token || secrets.PRODCAST_RELEASE_TOKEN }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install Inno Setup
+        run: choco install innosetup --version=6.7.1 --yes --no-progress
+      - name: Build and smoke-test Agent
+        shell: pwsh
+        env:
+          PRODCAST_RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
+          PRODCAST_SOURCE_REPOSITORY: saatchi190499/prodcast-agent
+        run: ./release/build_windows.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-payload
+          path: dist/package/*
+          if-no-files-found: error
+          compression-level: 0
+
+  worker:
+    name: Build Worker
+    needs: resolve
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - uses: actions/create-github-app-token@v2
+        if: env.PRODCAST_RELEASE_APP_ID != ''
+        id: release-token
+        with:
+          app-id: ${{ env.PRODCAST_RELEASE_APP_ID }}
+          private-key: ${{ secrets.PRODCAST_RELEASE_APP_PRIVATE_KEY }}
+          owner: saatchi190499
+          repositories: prodcast-release,prodcast-app,prodcast-agent,prodcast-worker,prodcast-ai
+      - uses: actions/checkout@v4
+        with:
+          repository: saatchi190499/prodcast-worker
+          ref: ${{ needs.resolve.outputs.worker_sha }}
+          token: ${{ steps.release-token.outputs.token || secrets.PRODCAST_RELEASE_TOKEN }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Build and smoke-test Worker
+        shell: pwsh
+        env:
+          PRODCAST_RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
+          PRODCAST_SOURCE_REPOSITORY: saatchi190499/prodcast-worker
+        run: ./release/build_windows.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: worker-payload
+          path: dist/release/*
+          if-no-files-found: error
+          compression-level: 0
+
+  ai:
+    name: Build AI
+    needs: resolve
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/create-github-app-token@v2
+        if: env.PRODCAST_RELEASE_APP_ID != ''
+        id: release-token
+        with:
+          app-id: ${{ env.PRODCAST_RELEASE_APP_ID }}
+          private-key: ${{ secrets.PRODCAST_RELEASE_APP_PRIVATE_KEY }}
+          owner: saatchi190499
+          repositories: prodcast-release,prodcast-app,prodcast-agent,prodcast-worker,prodcast-ai
+      - uses: actions/checkout@v4
+        with:
+          repository: saatchi190499/prodcast-ai
+          ref: ${{ needs.resolve.outputs.ai_sha }}
+          token: ${{ steps.release-token.outputs.token || secrets.PRODCAST_RELEASE_TOKEN }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Build AI image and deployment payload
+        env:
+          PRODCAST_RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
+          PRODCAST_SOURCE_REPOSITORY: saatchi190499/prodcast-ai
+          PRODCAST_PUBLISH_IMAGES: 'false'
+        run: python release/build_linux.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ai-payload
+          path: dist/release/*
+          if-no-files-found: error
+          compression-level: 0
+
+  manager:
+    name: Build Manager
+    needs: resolve
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - uses: actions/create-github-app-token@v2
+        if: env.PRODCAST_RELEASE_APP_ID != ''
+        id: release-token
+        with:
+          app-id: ${{ env.PRODCAST_RELEASE_APP_ID }}
+          private-key: ${{ secrets.PRODCAST_RELEASE_APP_PRIVATE_KEY }}
+          owner: saatchi190499
+          repositories: prodcast-release,prodcast-app,prodcast-agent,prodcast-worker,prodcast-ai
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.release_sha }}
+          token: ${{ steps.release-token.outputs.token || secrets.PRODCAST_RELEASE_TOKEN }}
+          fetch-depth: 1
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: Install locked build dependencies
         working-directory: prodcast-manager
         run: python -m pip install -r requirements-build.lock.txt
-      - name: Build and smoke-test standalone Manager
+      - name: Build and smoke-test one-file Manager
         working-directory: prodcast-manager
         shell: pwsh
         run: ./build.ps1 -Python python -Output dist
-      - name: Stage versioned Manager executable
+      - name: Stage versioned executable
         shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Path dist/manager -Force | Out-Null
-          Copy-Item prodcast-manager/dist/ProdCast-Manager.exe "dist/manager/ProdCast-Manager-${{ inputs.version }}.exe"
+        run: Copy-Item prodcast-manager/dist/ProdCast-Manager.exe "prodcast-manager/dist/ProdCast-Manager-$env:RELEASE_VERSION.exe"
       - uses: actions/upload-artifact@v4
         with:
-          name: standalone-manager
-          path: dist/manager/*.exe
+          name: manager-payload
+          path: prodcast-manager/dist/ProdCast-Manager-${{ env.RELEASE_VERSION }}.exe
           if-no-files-found: error
           compression-level: 0
 
   assemble:
-    needs: manager
+    name: Assemble and validate Complete
+    needs: [resolve, app, agent, worker, ai, manager]
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
+      - uses: actions/create-github-app-token@v2
+        if: env.PRODCAST_RELEASE_APP_ID != ''
+        id: release-token
+        with:
+          app-id: ${{ env.PRODCAST_RELEASE_APP_ID }}
+          private-key: ${{ secrets.PRODCAST_RELEASE_APP_PRIVATE_KEY }}
+          owner: saatchi190499
+          repositories: prodcast-release,prodcast-app,prodcast-agent,prodcast-worker,prodcast-ai
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.release_sha }}
+          token: ${{ steps.release-token.outputs.token || secrets.PRODCAST_RELEASE_TOKEN }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
       - uses: actions/download-artifact@v4
         with:
-          name: standalone-manager
-          path: dist/manager
-      - name: Assemble and upload verified release assets
+          name: source-snapshot
+          path: dist/snapshot
+      - uses: actions/download-artifact@v4
+        with:
+          name: app-payload
+          path: dist/components/app
+      - uses: actions/download-artifact@v4
+        with:
+          name: agent-payload
+          path: dist/components/agent
+      - uses: actions/download-artifact@v4
+        with:
+          name: worker-payload
+          path: dist/components/worker
+      - uses: actions/download-artifact@v4
+        with:
+          name: ai-payload
+          path: dist/components/ai
+      - uses: actions/download-artifact@v4
+        with:
+          name: manager-payload
+          path: dist/components/manager
+      - name: Download the selected static/offline base
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.release-token.outputs.token || secrets.PRODCAST_RELEASE_TOKEN }}
+        run: >-
+          gh release download "${{ needs.resolve.outputs.base_tag }}"
+          --repo saatchi190499/prodcast-release
+          --pattern "${{ needs.resolve.outputs.base_asset }}"
+          --dir dist/base
+      - name: Assemble, checksum, and validate all provenance
         run: >-
           python prodcast-manager/release/assemble.py
-          --version "${{ inputs.version }}"
-          --component-tag "${{ inputs.component_tag }}"
-          --worker-tag "${{ inputs.worker_tag }}"
-          --upgrade-from "${{ inputs.upgrade_from }}"
-          --base-tag "${{ inputs.base_tag }}"
-          --base-archive "${{ inputs.base_archive }}"
-          --manager-exe "dist/manager/ProdCast-Manager-${{ inputs.version }}.exe"
+          --version "$RELEASE_VERSION"
+          --base-archive "dist/base/${{ needs.resolve.outputs.base_asset }}"
+          --snapshot dist/snapshot/source-snapshot.json
+          --app dist/components/app
+          --agent dist/components/agent
+          --worker dist/components/worker
+          --ai dist/components/ai
+          --manager-exe "dist/components/manager/ProdCast-Manager-$RELEASE_VERSION.exe"
+          --output dist/assembled
+      - name: Run release assembly tests
+        run: |
+          python -m pip install pytest==9.1.1
+          python -m pytest prodcast-manager/tests/test_release_assembly.py prodcast-manager/tests/test_release_sources.py -q
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-release-assets
+          path: dist/assembled/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+  publish:
+    name: Draft, tag snapshot, and publish
+    if: ${{ ! inputs.build_only }}
+    needs: [resolve, assemble]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: production-release
+    steps:
+      - uses: actions/create-github-app-token@v2
+        if: env.PRODCAST_RELEASE_APP_ID != ''
+        id: release-token
+        with:
+          app-id: ${{ env.PRODCAST_RELEASE_APP_ID }}
+          private-key: ${{ secrets.PRODCAST_RELEASE_APP_PRIVATE_KEY }}
+          owner: saatchi190499
+          repositories: prodcast-release,prodcast-app,prodcast-agent,prodcast-worker,prodcast-ai
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.release_sha }}
+          token: ${{ steps.release-token.outputs.token || secrets.PRODCAST_RELEASE_TOKEN }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: source-snapshot
+          path: dist/snapshot
+      - uses: actions/download-artifact@v4
+        with:
+          name: verified-release-assets
+          path: dist/assembled
+      - name: Revalidate release and tag absence
+        env:
+          PRODCAST_RELEASE_TOKEN: ${{ steps.release-token.outputs.token || secrets.PRODCAST_RELEASE_TOKEN }}
+        run: python prodcast-manager/release/release_sources.py preflight --snapshot dist/snapshot/source-snapshot.json
+      - name: Create draft and upload verified assets
+        env:
+          GH_TOKEN: ${{ steps.release-token.outputs.token || secrets.PRODCAST_RELEASE_TOKEN }}
+        run: >-
+          gh release create "$RELEASE_VERSION"
+          dist/assembled/*
+          --repo saatchi190499/prodcast-release
+          --target "${{ needs.resolve.outputs.release_sha }}"
+          --title "ProdCast $RELEASE_VERSION"
+          --notes-file dist/assembled/RELEASE-NOTES.md
+          --draft
+      - name: Recheck and create immutable tags in every repository
+        env:
+          PRODCAST_RELEASE_TOKEN: ${{ steps.release-token.outputs.token || secrets.PRODCAST_RELEASE_TOKEN }}
+        run: python prodcast-manager/release/release_sources.py create-tags --snapshot dist/snapshot/source-snapshot.json
+      - name: Publish only after every tag is verified
+        env:
+          GH_TOKEN: ${{ steps.release-token.outputs.token || secrets.PRODCAST_RELEASE_TOKEN }}
+        run: gh release edit "$RELEASE_VERSION" --repo saatchi190499/prodcast-release --draft=false
+      - name: Write release summary
+        env:
+          BASE_TAG: ${{ needs.resolve.outputs.base_tag }}
+        run: python prodcast-manager/release/write_summary.py dist/snapshot/source-snapshot.json dist/assembled "$GITHUB_STEP_SUMMARY" published
+
+  build-only-summary:
+    name: Build-only summary
+    if: ${{ inputs.build_only }}
+    needs: [resolve, assemble]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.release_sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: source-snapshot
+          path: dist/snapshot
+      - uses: actions/download-artifact@v4
+        with:
+          name: verified-release-assets
+          path: dist/assembled
+      - run: python prodcast-manager/release/write_summary.py dist/snapshot/source-snapshot.json dist/assembled "$GITHUB_STEP_SUMMARY" build-only

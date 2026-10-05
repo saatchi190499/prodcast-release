@@ -434,7 +434,7 @@ EN = {'Восстановить': 'Repair',
                                                                               'retrieve its fingerprint.',
  'Получить отпечаток без отправки пароля': 'Get fingerprint without sending password',
  'Использовать эти данные': 'Use these details',
- 'Новая площадка — будет сохранена в data/sites рядом с Manager': 'New site - will be saved in data/sites beside Manager',
+ 'Новая площадка — будет сохранена в prodcast-data/sites рядом с Manager': 'New site - will be saved in prodcast-data/sites beside Manager',
  'Конфигурация сохранена рядом с Manager.': 'Configuration saved beside Manager.',
  'Данные доступа сохранены в portable-площадке; пароль хранилища больше не требуется.': 'Access details saved in the portable site; a '
                                                                                         'vault password is no longer required.',
@@ -743,7 +743,7 @@ EN = {'Восстановить': 'Repair',
                                                                                                              'match?',
  'Отпечаток подтверждён. Сохраните окно и конфигурацию площадки.': 'Fingerprint confirmed. Save this dialog and the site configuration.',
  'Отпечаток не подтверждён; доверенный ключ не изменён.': 'Fingerprint not confirmed; the trusted key is unchanged.',
- 'Эта площадка уже есть в data/sites. Откройте её site.json из папки Manager.': 'This site already exists in data/sites. Open its '
+ 'Эта площадка уже есть в prodcast-data/sites. Откройте её site.json из папки Manager.': 'This site already exists in prodcast-data/sites. Open its '
                                                                                 'site.json from the Manager folder.',
  'Импорт состояния через символические ссылки запрещён': 'Importing state through symbolic links is not allowed',
  'Путь площадки выходит за пределы portable-папки': 'The site path is outside the portable folder',

@@ -12,7 +12,7 @@ def application_directory():
 
 class SessionLog:
     def __init__(self,directory=None):
-        self.directory=Path(directory) if directory else application_directory()/'logs'
+        self.directory=Path(directory) if directory else application_directory()/'prodcast-data'/'logs'
         self.directory.mkdir(parents=True,exist_ok=True)
         self.stamp=datetime.now().strftime('%Y%m%d-%H%M%S')+'-'+uuid.uuid4().hex[:6]
         self.path=self.directory/('manager-'+self.stamp+'.log')
