@@ -1,6 +1,8 @@
 # Creating a new ProdCast release
 
 This guide describes the release process introduced with ProdCast v0.6.0.
+The authoritative tag and manifest spelling rules are in
+[`VERSIONING.md`](../VERSIONING.md) and must be applied to every release.
 
 The final release has this layout:
 
@@ -13,18 +15,23 @@ Agent and Manager must never be placed inside the Complete ZIP. The Worker packa
 
 ## 1. Choose the versions
 
-Use one stable release version and one matching component candidate tag.
+Use one stable release version, one matching App/Agent candidate tag, and the
+exact tested Worker tag. Worker may differ when that choice is explicitly
+recorded in the release.
 
 Example for the release after v0.6.0:
 
 ```text
 Stable release:       v0.7.0
 Component candidate: v0.7.0-rc.1
+Worker candidate:    v0.7.0-rc.1
+Upgrade from:        v0.6.0
 Base release tag:    v0.6.0
 Base archive:        ProdCast-v0.6.0-complete.zip
 ```
 
-App, Agent, and Worker must use the exact same candidate tag.
+App and Agent normally use the same candidate tag. The `worker_tag` workflow
+input records the Worker version independently; never relabel Worker bytes.
 
 If a candidate build fails after it has uploaded different bytes, fix the source and use the next candidate number, for example `v0.7.0-rc.2`. Do not move or replace an existing candidate tag.
 
@@ -121,6 +128,8 @@ Choose **Run workflow**, select `main`, and enter:
 |---|---|
 | `version` | `v0.7.0` |
 | `component_tag` | `v0.7.0-rc.1` |
+| `worker_tag` | `v0.7.0-rc.1` |
+| `upgrade_from` | `v0.6.0` |
 | `base_tag` | `v0.6.0` |
 | `base_archive` | `ProdCast-v0.6.0-complete.zip` |
 

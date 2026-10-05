@@ -46,7 +46,10 @@ def test_complete_excludes_agent_and_manager_executables(tmp_path):
     descriptors["agent"], archives["agent"] = payload(tmp_path, "agent", [f"ProdCastAgent-Setup-{RC}.exe", "workflow-agent-sbom.cdx.json"])
     manager = tmp_path / "ProdCast-Manager.exe"
     manager.write_bytes(b"manager")
-    assets = build("v0.6.0", base(tmp_path), descriptors, archives, manager, tmp_path / "out")
+    assets = build(
+        "v0.6.0", base(tmp_path), descriptors, archives, manager, tmp_path / "out",
+        ["v0.5.0-rc.2", "v0.5.0"],
+    )
     with zipfile.ZipFile(assets["complete"]) as archive:
         names = archive.namelist()
         assert not any(name.lower().endswith(".exe") for name in names)
@@ -57,4 +60,7 @@ def test_complete_excludes_agent_and_manager_executables(tmp_path):
     external = {item["name"] for item in manifest["artifacts"] if item.get("location") == "release-asset"}
     assert external == {"ProdCastAgent-Setup-v0.6.0.exe", "ProdCast-Manager-v0.6.0.exe"}
     assert any(item["name"] == "offline-ollama.tar.xz" for item in manifest["artifacts"])
+    assert {"v0.5.0-rc.2", "v0.5.0"} <= set(manifest["management"]["upgrade_from"])
+    worker = next(item for item in manifest["components"] if item["component"] == "worker")
+    assert worker["binary_version"] == RC
     assert assets["manager"].read_bytes() == b"manager"

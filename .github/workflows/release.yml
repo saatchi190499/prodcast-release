@@ -8,9 +8,17 @@ on:
         required: true
         default: v0.6.0
       component_tag:
-        description: Matching App, Agent, and Worker candidate tag
+        description: Matching App and Agent candidate tag
         required: true
-        default: v0.6.0-rc.1
+        default: v0.6.1-rc.1
+      worker_tag:
+        description: Exact tested Worker candidate tag (may differ from App and Agent)
+        required: true
+        default: v0.6.0-rc.2
+      upgrade_from:
+        description: Comma-separated exact versions accepted for upgrade (include the v prefix)
+        required: true
+        default: v0.5.0-rc.2,v0.5.0
       base_tag:
         description: Published base release tag
         required: true
@@ -72,6 +80,8 @@ jobs:
           python prodcast-manager/release/assemble.py
           --version "${{ inputs.version }}"
           --component-tag "${{ inputs.component_tag }}"
+          --worker-tag "${{ inputs.worker_tag }}"
+          --upgrade-from "${{ inputs.upgrade_from }}"
           --base-tag "${{ inputs.base_tag }}"
           --base-archive "${{ inputs.base_archive }}"
           --manager-exe "dist/manager/ProdCast-Manager-${{ inputs.version }}.exe"

@@ -37,6 +37,12 @@ def validate_version(value: str) -> str:
     return value
 
 
+def validate_upgrade_version(value: str) -> str:
+    if not re.fullmatch(r"v\d+\.\d+\.\d+(?:-rc\.\d+)?", value):
+        raise ValueError("Upgrade version must use vX.Y.Z or vX.Y.Z-rc.N")
+    return value
+
+
 def record(path: Path, **extra: object) -> dict[str, object]:
     path = Path(path)
     return {"name": path.name, "bytes": path.stat().st_size, "sha256": sha256(path), **extra}
@@ -149,7 +155,7 @@ def mapped_name(component: str, name: str, source_tag: str, target: str) -> str:
     return name.replace(source_tag, target)
 
 
-def build(version: str, base_archive: Path, descriptors: dict[str, Path], archives: dict[str, Path], manager_exe: Path, output: Path) -> dict[str, Path]:
+def build(version: str, base_archive: Path, descriptors: dict[str, Path], archives: dict[str, Path], manager_exe: Path, output: Path, upgrade_from: list[str] | None = None) -> dict[str, Path]:
     """Build and verify release assets without contacting GitHub."""
     target = validate_version(version)
     output = Path(output)
@@ -231,6 +237,10 @@ def build(version: str, base_archive: Path, descriptors: dict[str, Path], archiv
         "standalone_executables": [f"ProdCastAgent-Setup-{target}.exe", f"ProdCast-Manager-{target}.exe"],
     }
     manifest.setdefault("management", {})["recommended_manager"] = target.removeprefix("v")
+    requested_upgrades = {validate_upgrade_version(item) for item in (upgrade_from or [])}
+    manifest["management"]["upgrade_from"] = sorted(
+        set(manifest["management"].get("upgrade_from", [])) | requested_upgrades
+    )
     manifest["management"]["distribution"] = "standalone-exe"
     external += [record(output / f"ProdCastAgent-Setup-{target}.exe", location="release-asset"), record(manager_output, location="release-asset")]
     manifest["artifacts"] = external + [record(path, location="complete") for path in sorted(contents.iterdir()) if path.name not in controls]
@@ -277,6 +287,8 @@ def main() -> None:
     parser.add_argument("--base-tag", required=True)
     parser.add_argument("--base-archive", required=True)
     parser.add_argument("--component-tag", required=True)
+    parser.add_argument("--worker-tag")
+    parser.add_argument("--upgrade-from", default="")
     parser.add_argument("--manager-exe", required=True)
     parser.add_argument("--output", default="dist/assembled")
     args = parser.parse_args()
@@ -287,16 +299,18 @@ def main() -> None:
         base = download(args.base_tag, args.base_archive, temp / "base")
         descriptors: dict[str, Path] = {}
         archives: dict[str, Path] = {}
+        component_tags = {"app": args.component_tag, "agent": args.component_tag, "worker": args.worker_tag or args.component_tag}
         for component in sorted(COMPONENTS):
-            stem = f"prodcast-{component}-{args.component_tag}-component"
+            stem = f"prodcast-{component}-{component_tags[component]}-component"
             descriptors[component] = download(target, stem + ".json", temp / component)
             archives[component] = download(target, stem + ".zip", temp / component)
-        assets = build(target, base, descriptors, archives, Path(args.manager_exe), output)
+        upgrade_from = [item.strip() for item in args.upgrade_from.split(",") if item.strip()]
+        assets = build(target, base, descriptors, archives, Path(args.manager_exe), output, upgrade_from)
         paths = [assets[key] for key in ("complete", "agent", "manager", "manifest", "checksums", "notes")]
         gh("release", "upload", target, *map(str, paths), "--repo", REPOSITORY)
         gh("release", "edit", target, "--repo", REPOSITORY, "--title", f"ProdCast {target}", "--notes-file", str(assets["notes"]))
         for component in sorted(COMPONENTS):
-            stem = f"prodcast-{component}-{args.component_tag}-component"
+            stem = f"prodcast-{component}-{component_tags[component]}-component"
             gh("release", "delete-asset", target, stem + ".json", "--repo", REPOSITORY, "--yes")
             gh("release", "delete-asset", target, stem + ".zip", "--repo", REPOSITORY, "--yes")
         print(json.dumps({key: {"name": path.name, "sha256": sha256(path)} for key, path in assets.items()}, indent=2))
