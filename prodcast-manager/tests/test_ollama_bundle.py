@@ -97,3 +97,32 @@ def test_inner_file_must_match_manifest_even_when_zip_matches(bundle):
         z.writestr('runtime.tar.xz',b'bad runtime');z.writestr('metadata.tar.gz',b'metadata.tar.gz')
     doc['management']['offline']['external_ollama'].update(bytes=archive.stat().st_size,sha256=sha(archive))
     with pytest.raises(ValueError,match='Missing/corrupt AI offline payload'):load(ai=True)
+
+
+def test_old_names_and_recompressed_zip_use_trusted_inner_bytes(bundle):
+    root,archive,model,doc,load=bundle
+    old_hash=doc['management']['offline']['external_ollama']['sha256']
+    with zipfile.ZipFile(archive,'w',compression=zipfile.ZIP_DEFLATED) as z:
+        z.writestr('ollama-v0.4-runtime.tar.xz',b'runtime.tar.xz')
+        z.writestr('ollama-v0.4-model.tar.gz',b'metadata.tar.gz')
+        z.comment=b'older release packaging'
+    assert sha(archive)!=old_hash
+    files=load(ai=True).for_role('ai')
+    assert files['offline-ollama_runtime'].name=='runtime.tar.xz'
+    assert files['offline-model_archive'].read_bytes()==b'metadata.tar.gz'
+
+
+@pytest.mark.parametrize('name',['../runtime.tar.xz','/runtime.tar.xz','C:runtime.tar.xz'])
+def test_compatible_bundle_still_rejects_unsafe_names(bundle,name):
+    root,archive,model,doc,load=bundle
+    with zipfile.ZipFile(archive,'w') as z:
+        z.writestr(name,b'runtime.tar.xz');z.writestr('metadata.tar.gz',b'metadata.tar.gz')
+    with pytest.raises(ValueError):load(ai=True)
+
+
+def test_same_size_changed_inner_bytes_are_rejected(bundle):
+    root,archive,model,doc,load=bundle
+    with zipfile.ZipFile(archive,'w') as z:
+        z.writestr('old-runtime.tar.xz',b'Xuntime.tar.xz')
+        z.writestr('metadata.tar.gz',b'metadata.tar.gz')
+    with pytest.raises(ValueError,match='Missing/corrupt AI offline payload'):load(ai=True)

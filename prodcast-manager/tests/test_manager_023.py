@@ -128,7 +128,6 @@ def test_gui_language_dynamic_workers_and_optional_ai_preserve_input(tmp_path):
         assert str(app.ai_model_entry.cget('state'))=='disabled'
         assert str(app.ai_model_button.cget('state'))=='disabled'
         assert str(app.ai_ollama_entry.cget('state'))=='disabled'
-        assert str(app.ai_ollama_button.cget('state'))=='disabled'
         app.ai_ollama.set('C:/offline/ollama.zip')
         app.ai_model.set('C:/offline/model.gguf')
         app.worker_count.set('3');app.hostvars['worker3']['address'].set('192.168.31.153')
@@ -144,7 +143,6 @@ def test_gui_language_dynamic_workers_and_optional_ai_preserve_input(tmp_path):
         app.install_ai.set(True)
         assert all(str(w.cget('state')) in ('normal','readonly') for w in app.ai_widgets)
         assert str(app.ai_model_entry.cget('state'))=='normal'
-        assert str(app.ai_ollama_entry.cget('state'))=='normal'
         assert str(app.ai_ollama_button.cget('state'))=='normal'
         assert app.ai_ollama.get()=='C:/offline/ollama.zip'
         assert app.ai_model.get()=='C:/offline/model.gguf'

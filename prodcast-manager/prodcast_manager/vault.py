@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography import x509
 from cryptography.x509.oid import NameOID, ExtendedKeyUsageOID
-from .config import atomic_json, topology_hash, file_lock, worker_roles
+from .config import atomic_json, topology_hash, file_lock, worker_roles, validate_membership
 
 class Vault:
     def __init__(self,path,password):
@@ -35,6 +35,7 @@ class Vault:
             self.loaded_ciphertext=ciphertext
 
     def initialize(self,c):
+        validate_membership(c,self.data)
         fingerprint=topology_hash(c)
         if 'topology' in self.data:
             if self.data['topology']!=fingerprint: raise ValueError('Topology differs from encrypted installation state; use the original site file')

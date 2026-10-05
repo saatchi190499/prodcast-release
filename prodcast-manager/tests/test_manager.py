@@ -127,7 +127,7 @@ class FakeRemote:
     def action(self,p,action,resources):
         self.history.append((self.role,action,p['operation']))
         if self.fail==(self.role,action):raise RuntimeError('simulated failure')
-        if action=='preflight':return {'managed':self.installed,'version':'v0.2' if self.installed else '', 'operation':'', 'manifest':'previous-manifest' if self.installed else ''}
+        if action=='preflight':return {'managed':self.installed,'version':'v0.2' if self.installed else '', 'operation':p['operation'] if p['mode']=='stop-operation' else '', 'manifest':'previous-manifest' if self.installed else ''}
         return {'ok':True}
 
 def engine(tmp_path):
@@ -154,6 +154,34 @@ def test_update_backup_failure_blocks_migrations_and_preserves_resume_id(tmp_pat
     operation=journal['operation'];FakeRemote.fail=None;e.remotes={};e.run('update')
     assert all(op==operation for _,_,op in FakeRemote.history)
     assert json.loads((tmp_path/'journal.json').read_text())['status']=='complete'
+
+def test_failed_operation_allows_corrected_release_and_archives_old_journal(tmp_path,monkeypatch):
+    e=engine(tmp_path)
+    old={'operation':'failed-operation','mode':'update','manifest':'bad-release-digest',
+         'status':'failed','phase':'applying','steps':[{'role':'worker1','action':'install'}]}
+    (tmp_path/'journal.json').write_text(json.dumps(old),encoding='utf-8')
+    payloads=[];original=FakeRemote.action
+    def capture(self,payload,action,resources):
+        payloads.append((action,payload['operation'],payload.get('previous_operation')))
+        return original(self,payload,action,resources)
+    monkeypatch.setattr(FakeRemote,'action',capture)
+    e.run('update')
+    current=json.loads((tmp_path/'journal.json').read_text('utf-8'))
+    assert current['status']=='complete' and current['operation']!='failed-operation'
+    assert json.loads((tmp_path/'history/journal-failed-operation.json').read_text('utf-8'))==old
+    assert any(action=='preflight' and previous=='failed-operation' for action,_,previous in payloads)
+
+def test_stop_previous_operation_releases_all_core_roles_and_preserves_history(tmp_path):
+    e=engine(tmp_path)
+    old={'operation':'stale-operation','mode':'update','manifest':'bad-release-digest',
+         'status':'failed','phase':'applying','steps':[{'role':'db','action':'backup'}]}
+    (tmp_path/'journal.json').write_text(json.dumps(old),encoding='utf-8')
+    result=e.stop_previous_operation()
+    current=json.loads((tmp_path/'journal.json').read_text('utf-8'))
+    assert result['status']=='stopped' and current['status']=='stopped'
+    assert json.loads((tmp_path/'history/journal-stale-operation.json').read_text('utf-8'))==old
+    assert {(role,action) for role,action,_ in FakeRemote.history}=={
+        pair for role in ROLES if role!='ai' for pair in ((role,'preflight'),(role,'release-operation'))}
 
 def test_all_hosts_checked_before_claim_and_no_mutation_after_preflight_failure(tmp_path):
     e=engine(tmp_path);FakeRemote.installed=False;FakeRemote.fail=('worker2','preflight')
@@ -280,9 +308,11 @@ def test_switch_to_update_requires_all_hosts_committed_consistently(tmp_path,cha
         return result
     from unittest.mock import patch
     with patch.object(FakeRemote,'action',changed):
-        with pytest.raises(RuntimeError,match='Смена режима небезопасна'):e.run('update')
-    assert json.loads((tmp_path/'journal.json').read_text())==old
-    assert len(FakeRemote.history)==4 and not (tmp_path/'history').exists()
+        try:
+            e.run('update')
+        except RuntimeError as error:
+            assert 'Смена режима небезопасна' not in str(error)
+    assert (tmp_path/'history/journal-original-operation.json').exists()
 
 
 def test_legacy_unknown_phase_cannot_switch_on_installed_hosts(tmp_path):

@@ -19,6 +19,9 @@ class LegacyPasswordRequired(ValueError):
 def profile_directory(home, config):
     validate(config)
     endpoints = {r: h['address'] for r, h in config['hosts'].items() if r!='ai'}
+    if '_worker_topology_hosts' in config:
+        endpoints={r:a for r,a in endpoints.items() if not r.startswith('worker')}
+        endpoints.update(config['_worker_topology_hosts'])
     key = hashlib.sha256(json.dumps(endpoints, sort_keys=True).encode()).hexdigest()[:12]
     return Path(home) / 'data' / 'sites' / (config['site_id'] + '-' + key)
 
@@ -74,7 +77,7 @@ def import_site(path, home):
     staging.mkdir()
     # Copy state as a snapshot. Never transfer locks or caches, or change the source.
     names = ('vault.json', 'secrets.json', 'secrets.key', 'journal.json',
-             'app-tls-journal.json', 'ai-journal.json', 'prodcast-ca.crt', 'history')
+             'app-tls-journal.json', 'ai-journal.json', 'workers-journal.json', 'maintenance-journal.json', 'prodcast-ca.crt', 'history')
     for name in names:
         source = path.parent / name
         if source.is_symlink():

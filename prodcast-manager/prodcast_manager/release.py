@@ -2,6 +2,7 @@ import hashlib
 import json
 import re
 import shutil
+import tempfile
 import stat
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -120,16 +121,40 @@ class Release:
         if not spec:return
         path=self.ollama_path
         if path is None or not path.is_file():raise ValueError('Select the Ollama components ZIP from this release. The AI model is a separate file.')
-        if path.stat().st_size!=spec['bytes'] or sha(path)!=spec['sha256']:
-            raise ValueError('Ollama components checksum mismatch. Use the archive linked in this release.')
         expected={self.offline_spec['ollama_runtime'],self.offline_spec['model_archive']}
-        with zipfile.ZipFile(path) as z:
-            if len(z.infolist())!=len(expected) or {i.filename for i in z.infolist()}!=expected:
-                raise ValueError('Unexpected files in Ollama components ZIP')
-        dest=self.cache/('ollama-'+spec['sha256'][:20])
+        # The trusted release manifest authenticates the inner payloads. ZIP
+        # timestamps/compression and old release filenames need not match.
+        digest=sha(path)
+        dest=self.cache/('ollama-'+digest[:20]+'-'+self.digest[:12])
+        self.cache.mkdir(parents=True,exist_ok=True)
         if not (dest/'.extracted').exists():
-            safe_zip(path,dest)
-            (dest/'.extracted').write_text('ok')
+            if not zipfile.is_zipfile(path):
+                raise ValueError('Ollama components checksum mismatch: not a valid ZIP')
+            with zipfile.ZipFile(path) as z:
+                infos=z.infolist()
+                if len(infos)!=len(expected) or len({i.filename.casefold() for i in infos})!=len(infos):
+                    raise ValueError('Unexpected files in Ollama components ZIP')
+                for i in infos:
+                    if (PurePosixPath(i.filename).name!=i.filename or ':' in i.filename or '\\' in i.orig_filename
+                            or '\x00' in i.orig_filename or i.is_dir() or stat.S_ISLNK(i.external_attr>>16)):
+                        raise ValueError('Unexpected files in Ollama components ZIP')
+                    if i.file_size not in {self.assets[n]['bytes'] for n in expected}:
+                        raise ValueError('Missing/corrupt AI offline payload: unexpected size')
+                with tempfile.TemporaryDirectory(prefix='ollama-check-',dir=self.cache) as temporary:
+                    remaining=set(expected)
+                    for index,i in enumerate(infos):
+                        target=Path(temporary)/str(index);h=hashlib.sha256();size=0
+                        with z.open(i) as src,target.open('wb') as dst:
+                            for block in iter(lambda:src.read(1024*1024),b''):
+                                size+=len(block)
+                                if size>i.file_size:raise ValueError('Ollama payload exceeds declared size')
+                                h.update(block);dst.write(block)
+                        matches=[n for n in remaining if self.assets[n]['sha256']==h.hexdigest() and self.assets[n]['bytes']==size]
+                        if len(matches)!=1:raise ValueError('Missing/corrupt AI offline payload: '+i.filename)
+                        name=matches[0];remaining.remove(name);target.rename(Path(temporary)/name)
+                    dest.mkdir(parents=True,exist_ok=True)
+                    for name in expected:shutil.copyfile(Path(temporary)/name,dest/name)
+                    (dest/'.extracted').write_text('ok')
         for name in expected:
             if not (dest/name).is_file() or sha(dest/name)!=self.assets[name]['sha256']:
                 raise ValueError('Missing/corrupt AI offline payload: '+name)

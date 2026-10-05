@@ -20,7 +20,8 @@ def main():
         if stream is not None and hasattr(stream,'reconfigure'):
             stream.reconfigure(encoding='utf-8',errors='backslashreplace')
     parser=argparse.ArgumentParser(description='ProdCast deployment manager')
-    parser.add_argument('action',nargs='?',choices=['gui','init','trust','credentials','plan','check','install','update','repair','ai','status','backup','import-pfx','app-tls','self-test'],default='gui')
+    parser.add_argument('action',nargs='?',choices=['gui','init','trust','credentials','plan','check','install','update','repair','ai','status','backup','import-pfx','app-tls','add-workers','self-test'],default='gui')
+    parser.add_argument('--workers-site',help='Proposed site.json with additional Workers; --site remains the installed profile')
     parser.add_argument('--site',default=None);parser.add_argument('--release');parser.add_argument('--manifest-sha256',default='');parser.add_argument('--yes',action='store_true');parser.add_argument('--role',choices=('app','db','ai')+tuple('worker'+str(n) for n in range(1,17)))
     parser.add_argument('--gui-smoke',action='store_true',help='With self-test: initialize and close the hidden GUI without network access')
     parser.add_argument('--pfx',help='Customer PFX/P12 file; its password is requested interactively')
@@ -33,7 +34,7 @@ def main():
         from .gui import main as gui
         gui();return
     if a.action=='self-test':
-        for name in ('linux.py','worker.ps1','worker-service-runner.py','app.env.in','worker-grants.sql','directory_probe.py','maintenance_linux.py'):assert (RESOURCES/name).stat().st_size>100
+        for name in ('linux.py','worker.ps1','worker-service-runner.py','app.env.in','worker-grants.sql','directory_probe.py','maintenance_linux.py','workers_linux.py'):assert (RESOURCES/name).stat().st_size>100
         assert len(list((RESOURCES/'ldap_deps').glob('*.whl')))==2
         compile((RESOURCES/'linux.py').read_text('utf-8'),'linux.py','exec')
         validate(example())
@@ -99,12 +100,23 @@ def main():
             if not r.startswith('worker') and h['username']!='root':auth['sudo_password']=getpass.getpass(r+': sudo password (empty for NOPASSWD): ')
             v.data.setdefault('ssh',{})[r]=auth
         v.save();return
-    if a.action in ('install','update','repair','backup','app-tls','ai') and not a.yes:raise ValueError('Review plan and provide --yes to apply this operation')
+    if a.action in ('install','update','repair','backup','app-tls','ai','add-workers') and not a.yes:raise ValueError('Review plan and provide --yes to apply this operation')
     release=Release(a.release,directory/'cache',a.manifest_sha256,validate_ai=False,model_path=a.ai_model,ollama_path=a.ollama_components) if a.release else None
     logger=SessionLog();logger.protect(v.data)
     def log(message):print(logger.append(message),flush=True)
     log(tr('Локальный журнал: ')+str(logger.path))
-    try:Engine(c,v,release,directory,log,diagnostics=logger).run(a.action)
+    try:
+        if a.action=='add-workers':
+            from .workers import add_workers
+            if not a.workers_site or not release:raise ValueError('Provide --workers-site and the exact installed --release')
+            proposed=runtime_config(Path(a.workers_site).resolve());validate(proposed,True)
+            for role in worker_roles(proposed):
+                if role not in v.data.get('ssh',{}):
+                    host=proposed['hosts'][role]
+                    v.data.setdefault('ssh',{})[role]={'password' if host['auth']=='password' else 'passphrase':getpass.getpass(role+': SSH password / key passphrase: ')}
+            v.save()
+            add_workers(directory,proposed,v,release,log,diagnostics=logger)
+        else:Engine(c,v,release,directory,log,diagnostics=logger).run(a.action)
     except Exception as e:
         log(tr('ОШИБКА: ')+str(e));raise
 

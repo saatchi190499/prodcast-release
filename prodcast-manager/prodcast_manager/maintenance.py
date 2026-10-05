@@ -107,6 +107,8 @@ class Maintenance:
         if self.e.vault.data.get('topology')!=topology_hash(self.e.c):raise ValueError('Use the original installation profile or import it from a backup')
         self.mode=mode;local=self.e.dir/'maintenance-journal.json'
         with file_lock(self.e.dir/'operation.lock'):
+            from .workers import require_no_expansion
+            require_no_expansion(self.e.dir)
             prior=json.loads(local.read_text('utf-8')) if local.exists() else {}
             pending=prior.get('status') in ('running','failed')
             if pending and prior['mode']!=mode:raise ValueError('Resume the previous maintenance operation first: '+prior['mode'])

@@ -5,7 +5,7 @@ import os
 import time
 import uuid
 from pathlib import Path
-from .config import ROLES, CORE_ROLES, core_roles, worker_roles, validate, topology_hash, atomic_json, file_lock
+from .config import ROLES, CORE_ROLES, core_roles, worker_roles, validate, topology_hash, atomic_json, file_lock, validate_membership
 from .ssh import Remote
 from .certificates import upgrade_legacy_certificates
 from .app_certificate import validate_for_site
@@ -38,6 +38,7 @@ def plan(mode,install_ai=True,workers=None):
 class Engine:
     def __init__(self,c,vault,release,state_dir,log=print,remote_factory=Remote,diagnostics=None):
         self.c=validate(c,True); self.vault=vault; self.release=release
+        validate_membership(c,vault.data)
         self.dir=Path(state_dir); self.dir.mkdir(parents=True,exist_ok=True)
         self.log=log; self.factory=remote_factory; self.remotes={}
         self.report=[]
@@ -58,6 +59,7 @@ class Engine:
             certs={'db':['postgres','redis'],'ai':['ai'],'app':['site','license']}[role]
         files=self.release.for_role(role) if self.release else {}
         return dict(site=self.c,topology=topology_hash(self.c),installation_id=self.vault.data.get('installation_id',''),role=role,operation=operation,mode=mode,
+                    previous_operation=getattr(self,'previous_operation',''),
                     version=self.release.version if self.release else '',
                     manifest=self.release.digest if self.release else '',
                     files={k:{'name':v.name,'sha256':self.release.offline_spec['external_model']['sha256'] if k=='offline-model_blob' else self.release.assets[v.name]['sha256']} for k,v in files.items()},
@@ -79,6 +81,8 @@ class Engine:
             if not self.release.doc.get('management',{}).get('directory_configuration'):
                 raise ValueError('LDAP configuration requires a release with the App directory configuration contract (v0.5.0 or later).')
         with file_lock(self.dir/'operation.lock'):
+            from .workers import require_no_expansion
+            require_no_expansion(self.dir)
             maintenance_path=self.dir/'maintenance-journal.json'
             if mode not in ('check','status') and maintenance_path.exists() and json.loads(maintenance_path.read_text('utf-8')).get('status') in ('running','failed'):
                 raise ValueError('Resume the interrupted backup/restore/reset operation before deploying')
@@ -160,15 +164,67 @@ class Engine:
             try:r.cleanup()
             finally:r.close()
 
+    def stop_previous_operation(self):
+        """Release a stale deployment owner without deleting recovery data."""
+        path=self.dir/'journal.json'
+        journal=json.loads(path.read_text('utf-8')) if path.exists() else {}
+        status=journal.get('status')
+        if status not in ('running','failed') or not journal.get('operation'):
+            return {'status':'idle','message':tr('Незавершённой операции для остановки нет.')}
+        operation=journal['operation'];errors=[];released=[]
+        with file_lock(self.dir/'operation.lock'):
+            for role in core_roles(self.c):
+                remote=None
+                try:
+                    remote=self.factory(role,self.c['hosts'][role],self.vault.data.get('ssh',{}).get(role,{}),self.log)
+                    remote.diagnostics=self.diagnostics
+                    remote.probe();remote.prepare_stage()
+                    resource='worker.ps1' if role.startswith('worker') else 'linux.py'
+                    remote.put_bytes(resource,(RESOURCES/resource).read_bytes())
+                    # The agent validates the owner against the operation ID
+                    # carried in the payload. Send the ID observed on each VM,
+                    # after verifying it still matches the failed journal.
+                    probe=remote.action(self.payload(role,operation,'stop-operation'),'preflight',RESOURCES)
+                    remote_operation=probe.get('operation')
+                    if remote_operation in (None,''):
+                        released.append({'role':role,'result':{'released':False,'reason':'no operation owner'}})
+                        continue
+                    release_payload=self.payload(role,operation,'stop-operation')
+                    # The local journal can be older than the owner recorded on
+                    # a VM. Preflight has verified site, topology, and vault;
+                    # release the exact owner observed there.
+                    release_payload['operation']=remote_operation
+                    result=remote.action(release_payload,'release-operation',RESOURCES)
+                    released.append({'role':role,'result':result})
+                except Exception as error:
+                    errors.append(role+': '+str(error))
+                finally:
+                    if remote:
+                        try:remote.cleanup()
+                        except Exception:pass
+                        try:remote.close()
+                        except Exception:pass
+            if errors:
+                raise RuntimeError(tr('Не удалось остановить предыдущую операцию на: ')+', '.join(errors))
+            history=self.dir/'history';history.mkdir(exist_ok=True)
+            archived=history/('journal-'+operation+'.json')
+            if not archived.exists():atomic_json(archived,journal)
+            journal.update(status='stopped',stopped_at=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),stop_reason='manual')
+            journal.pop('inflight',None);atomic_json(path,journal)
+        self.log(tr('Предыдущая операция остановлена. Vault и журналы сохранены; новый релиз разрешён.'))
+        return {'status':'stopped','operation':operation,'released':released}
+
     def _run(self,mode):
         path=self.dir/'journal.json'
         journal=json.loads(path.read_text('utf-8')) if path.exists() else {}
         mutating=mode in ('install','update','repair')
-        pending=journal.get('status') in ('running','failed')
+        digest=self.release.digest if self.release else ''
+        same_failed_release=(journal.get('status')=='failed' and journal.get('manifest')==digest)
+        pending=journal.get('status')=='running' or same_failed_release
         if mutating and pending and journal.get('phase')=='applying' and 'ai_address' in journal:
             if (journal.get('install_ai'),journal['ai_address'])!=(self.c.get('install_ai',True),self.c['hosts']['ai']['address']):
                 raise ValueError('Finish the interrupted operation before changing AI settings.')
-        digest=self.release.digest if self.release else ''
+        self.previous_operation = journal.get('operation','') if journal.get('status') in ('failed','stopped','cancelled') and not same_failed_release else ''
         switching=False
         if mutating and pending:
             if journal['mode']!=mode or journal['manifest']!=digest:
@@ -179,6 +235,11 @@ class Engine:
             operation=journal['operation']
         else: operation=uuid.uuid4().hex
         if mutating and not switching:
+            if journal.get('status') in ('failed','stopped','cancelled') and not same_failed_release and journal.get('operation'):
+                history=self.dir/'history';history.mkdir(exist_ok=True)
+                archived=history/('journal-'+journal['operation']+'.json')
+                if not archived.exists():atomic_json(archived,journal)
+                self.log(tr('Предыдущая операция завершилась ошибкой; её журнал сохранён в history. Новый запуск разрешён.'))
             # Carry an interrupted pre-0.1.12 AI transaction into its own journal,
             # including when the user disables AI while finishing the core.
             ai_path=self.dir/'ai-journal.json'
@@ -206,16 +267,29 @@ class Engine:
                 for name in (('worker.ps1','worker-service-runner.py') if role.startswith('worker') else ('linux.py','app.env.in','worker-grants.sql')):
                     r.put_bytes(name,(RESOURCES/name).read_bytes())
                 result=r.action(self.payload(role,operation,mode),'preflight',RESOURCES)
+                if mutating and result.get('maintenance') not in (None,'',operation):
+                    raise RuntimeError(role+': complete the pending maintenance / Worker expansion operation first')
                 statuses[role]=result; self.log(tr('{v0}: проверка пройдена').format(v0=role))
             preflight_complete=True
             if switching:
                 # A rejected Install on an existing stack is only a preflight.
                 # Permit Update after every host explicitly confirms a committed,
                 # consistent release and no outstanding remote operation.
-                committed_update=(mode in ('update','repair') and journal.get('phase')=='preflight'
-                    and all(s.get('managed') and s.get('version') in self.release.allowed_from+[self.release.version]
-                            and s.get('operation')=='' and s.get('manifest') for s in statuses.values())
-                    and len({(s['version'],s['manifest']) for s in statuses.values()})==1)
+                # A failed preflight has not claimed or changed a server. Once
+                # every VM independently confirms a managed installation with
+                # an allowed source version and no remote operation, archive
+                # the stale local journal even if its old manifest differs.
+                # This is important after correcting a release manifest (for
+                # example, adding v0.5.0 to upgrade_from): the old failed
+                # preflight must not force the operator to resume a bad hash.
+                preflight_only=(journal.get('phase')=='preflight' and not journal.get('steps') and not journal.get('inflight'))
+                if preflight_only:
+                    # The regular update/install checks below remain the source
+                    # of truth for VM state and upgrade_from. The old journal is
+                    # only a local record of a read-only failed preflight.
+                    committed_update=True
+                else:
+                    committed_update=False
                 if any(s.get('managed') or s.get('version') for s in statuses.values()) and not committed_update:
                     raise RuntimeError(tr('На одной из VM есть состояние установки. Смена режима небезопасна: продолжите исходную операцию с исходным релизом. Журнал сохранён.'))
                 atomic_json(self.dir/'history'/('journal-'+journal['operation']+'.json'),journal)
@@ -276,9 +350,10 @@ class Engine:
             if not applying:
                 self.log(tr('Предварительная проверка остановлена. Основные шаги установки/обновления этого запуска ещё не выполнялись. Сохраните vault и журнал, устраните причину и повторите ту же операцию.'))
             else:
-                self.log(tr('Операция остановлена. Не удаляйте vault и журнал. Повторите ту же операцию после устранения причины; откат БД автоматически не выполняется.'))
+                self.log(tr('Операция завершилась ошибкой. Vault и журнал сохранены; исправленный релиз можно запустить заново. Если VM удерживает старого владельца, нажмите «Остановить предыдущую операцию». Откат БД автоматически не выполняется.'))
             raise
         finally:
+            self.previous_operation = ''
             for r in self.remotes.values():
                 try: r.cleanup()
                 except Exception: self.log(tr('Не удалось очистить временный inbox на одном из серверов; удалите его после проверки операции.'))
