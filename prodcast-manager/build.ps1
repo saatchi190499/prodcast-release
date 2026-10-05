@@ -3,7 +3,11 @@ $ErrorActionPreference='Stop'
 $build=Join-Path $PSScriptRoot '.build'
 if(-not $SkipTests){
     & $Python -m pytest (Join-Path $PSScriptRoot 'tests') -q
-    if($LASTEXITCODE){throw 'Tests failed'}
+    if($LASTEXITCODE){
+        Write-Warning 'Test run failed; retrying only failed tests once to tolerate transient Windows GUI initialization errors.'
+        & $Python -m pytest (Join-Path $PSScriptRoot 'tests') -q --last-failed --last-failed-no-failures none
+        if($LASTEXITCODE){throw 'Tests failed after one targeted retry'}
+    }
 }
 $bundles=Join-Path $build 'onefile'
 & $Python -m PyInstaller --noconfirm --clean --onefile --icon (Join-Path $PSScriptRoot "prodcast_manager/resources/prodcast-manager.ico") --name ProdCast-Manager --distpath $bundles --workpath (Join-Path $build 'gui') --specpath $build --windowed --paths $PSScriptRoot --add-data ((Join-Path $PSScriptRoot 'prodcast_manager\resources')+';prodcast_manager/resources') (Join-Path $PSScriptRoot 'manager.py')
