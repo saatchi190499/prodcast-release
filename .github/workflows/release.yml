@@ -339,7 +339,7 @@ jobs:
           --output dist/assembled
       - name: Run release assembly tests
         run: |
-          python -m pip install pytest==9.1.1
+          python -m pip install -r prodcast-manager/requirements.txt pytest==9.1.1
           python -m pytest prodcast-manager/tests/test_release_assembly.py prodcast-manager/tests/test_release_sources.py -q
       - uses: actions/upload-artifact@v4
         with:
