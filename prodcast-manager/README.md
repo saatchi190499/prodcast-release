@@ -2,14 +2,15 @@
 
 Windows application for installing and updating ProdCast through SSH.
 
-This directory contains the source, tests, resources, and Windows build definition for the standalone ProdCast Manager executable.
+Version 0.6 adds resumable Worker expansion on installed sites and accepts older Ollama ZIP containers when their inner payload hashes match the selected trusted release. App, DB containers and existing Workers are not reinstalled by expansion.
 
 ## Documentation
 
 - [Русский](README-RU.md)
 - [English](README-EN.md)
 - [Offline installation](OFFLINE-EN.md)
-- [Изменения 0.5](CHANGES-0.5-RU.md)
+- [Изменения 0.6](CHANGES-0.6-RU.md)
+- [0.6 changes](CHANGES-0.6-EN.md)
 
 ## Build on Windows
 
@@ -21,7 +22,7 @@ python -m venv .venv
 .\build.ps1 -Python .\.venv\Scripts\python.exe
 ```
 
-The build script runs tests, builds single-file GUI and CLI executables, and checks packaged resources and GUI initialization. Output is written to `dist/`.
+The build script runs tests, builds GUI and CLI executables, and checks packaged resources and GUI initialization. Output is written to `dist/`.
 
 To run from source:
 
