@@ -6,6 +6,12 @@ from .directory_translations import EN as DIRECTORY_EN
 EN.update(DIRECTORY_EN)
 from .maintenance_translations import EN as MAINTENANCE_EN
 EN.update(MAINTENANCE_EN)
+EN.update({
+    'Добавить Workers…':'Add Workers…',
+    'Для расширения установленной площадки используйте «Добавить Workers…».':'To expand an installed site, use “Add Workers…”.',
+    'Откройте профиль установленной площадки.':'Open the installed site profile.',
+    'Будут установлены только новые Workers. Выберите тот же релиз, который уже установлен. App и прежние Workers не перезапускаются.':'Only new Workers will be installed. Select the exact installed release. App and existing Workers will not be restarted.',
+})
 
 _language='ru'
 def set_language(language):

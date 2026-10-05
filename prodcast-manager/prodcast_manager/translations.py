@@ -953,6 +953,13 @@ EN = {'Восстановить': 'Repair',
                                                                                                                                                                                                                                                                                    'a '
                                                                                                                                                                                                                                                                                    'separate '
                                                                                                                                                                                                                                                                                    'site.',
+ 'Остановить предыдущую операцию': 'Stop previous operation',
+ 'Будет освобождён только владелец завершившейся или зависшей операции на VM. Vault, резервные копии и журналы не удаляются. Продолжить?': 'This releases only the owner of the failed or stuck operation on the VMs. The vault, backups, and logs are not deleted. Continue?',
+ 'Незавершённой операции для остановки нет.': 'There is no unfinished operation to stop.',
+ 'Не удалось остановить предыдущую операцию на: ': 'Could not stop the previous operation on: ',
+ 'Предыдущая операция остановлена. Vault и журналы сохранены; новый релиз разрешён.': 'The previous operation was stopped. The vault and journals were preserved; a new release is allowed.',
+ 'Предыдущая операция завершилась ошибкой; её журнал сохранён в history. Новый запуск разрешён.': 'The previous operation failed; its journal was saved in history. A new run is allowed.',
+ 'Операция завершилась ошибкой. Vault и журнал сохранены; исправленный релиз можно запустить заново. Если VM удерживает старого владельца, нажмите «Остановить предыдущую операцию». Откат БД автоматически не выполняется.': 'The operation failed. The vault and journal were preserved; you can start the corrected release again. If a VM still holds the old owner, click Stop previous operation. The database is not rolled back automatically.',
  'Резервное копирование доступно после установки Manager на App, DB и выбранных Workers. Сначала завершите «Установить».': 'Backup is '
                                                                                                                            'available '
                                                                                                                            'after Manager '

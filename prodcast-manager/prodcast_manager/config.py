@@ -80,12 +80,30 @@ def validate(c, require_trust=False):
 
 def topology_hash(c):
     # Authentication can change without changing the managed installation.
-    v={k:v for k,v in c.items() if k not in ('hosts','install_gpu_driver','install_ai','_ai_topology_address')}
+    v={k:v for k,v in c.items() if k not in ('hosts','install_gpu_driver','install_ai','_ai_topology_address','_worker_topology_hosts')}
     v['hosts']={r:h['address'] for r,h in c['hosts'].items()}
+    if '_worker_topology_hosts' in c:
+        v['hosts']={r:a for r,a in v['hosts'].items() if not r.startswith('worker')}
+        v['hosts'].update(c['_worker_topology_hosts'])
     # Freeze only the optional endpoint's contribution to identity. Old profiles
     # retain their original hash; enabling AI never re-identifies the core stack.
     if '_ai_topology_address' in c:v['hosts']['ai']=c['_ai_topology_address']
     return hashlib.sha256(json.dumps(v,sort_keys=True).encode()).hexdigest()
+
+def worker_addresses(c):
+    return {r:c['hosts'][r]['address'] for r in worker_roles(c)}
+
+def validate_membership(c, data):
+    """Frozen topology is accepted only with the roster approved in this vault."""
+    baseline=c.get('_worker_topology_hosts')
+    approved=data.get('worker_hosts')
+    if baseline is not None or approved is not None:
+        if (not isinstance(baseline,dict) or not baseline
+                or baseline!=data.get('worker_topology_hosts')
+                or worker_addresses(c)!=approved
+                or any(approved.get(r)!=a for r,a in baseline.items())
+                or data.get('topology')!=topology_hash(c)):
+            raise ValueError('Worker membership differs from the approved installation profile')
 
 def atomic_json(path, obj):
     path=Path(path); path.parent.mkdir(parents=True,exist_ok=True)

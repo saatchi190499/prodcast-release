@@ -1,0 +1,107 @@
+"""Append Worker access to a running managed DB, without recreating containers."""
+import hashlib
+import ipaddress
+import json
+import os
+import re
+import stat
+from pathlib import Path
+
+
+def dispatch(a):
+    p=a.P; st=a.ST; spec=p['worker_expansion']; operation=p['operation']
+    if p['role']!='db' or p['mode']!='add-workers' or spec['id']!=operation:
+        raise RuntimeError('Invalid Worker expansion request')
+    if st.get('maintenance') not in (None,'',operation):raise RuntimeError('Another operation owns the DB')
+    if st.get('operation') not in (None,'',operation):raise RuntimeError('Another deployment owns the DB')
+    if not re.fullmatch('[a-f0-9]{32}',operation):raise RuntimeError('Invalid operation ID')
+    if st.get('version')!=p['version'] or st.get('manifest')!=p['manifest']:
+        raise RuntimeError('Worker expansion requires the exact installed release')
+    new=spec['new_workers']; previous=spec['previous_workers']
+    if not new or new!=['worker'+str(n) for n in range(len(previous)+1,len(previous)+len(new)+1)]:
+        raise RuntimeError('Workers must be appended consecutively')
+    if len(previous)+len(new)>16:raise RuntimeError('Too many Workers')
+    for role in new:ipaddress.IPv4Address(a.C['hosts'][role]['address'])
+    transaction=a.STATE/'workers-transaction.json'
+    receipt=json.loads(transaction.read_text()) if transaction.exists() else {}
+    if receipt and not receipt.get('complete') and receipt.get('operation')!=operation:
+        raise RuntimeError('Resume the existing Worker expansion')
+    if receipt.get('operation')==operation and receipt.get('target')!=spec['target']:
+        raise RuntimeError('Worker expansion target changed')
+    if p['action']=='workers-commit':
+        if receipt.get('operation')!=operation or not receipt.get('prepared'):
+            raise RuntimeError('Worker expansion is not prepared')
+        receipt['complete']=True;a.write(transaction,json.dumps(receipt))
+        st['maintenance']='';st['worker_hosts']={r:a.C['hosts'][r]['address'] for r in a.worker_roles()};a.save()
+        return {'complete':True}
+    if p['action']!='workers-prepare':raise RuntimeError('Unknown Worker expansion action')
+    a.require_database_data();a.database_ready()
+    folder=a.ROOT/'db/config';hba=folder/'pg_hba.conf';acl=folder/'users.acl'
+    names=['prodcast_worker_'+f'{int(r[6:]):02}' for r in new]
+    if receipt.get('operation')!=operation:
+        # Refuse to take over pre-existing accounts, even if their names match.
+        for name in names:
+            if a.psql("SELECT 1 FROM pg_roles WHERE rolname='"+name+"';").strip():
+                raise RuntimeError('A proposed Worker database account already exists')
+            if re.search(r'^user '+name+r'_scheduler\s',acl.read_text(),re.M):
+                raise RuntimeError('A proposed Worker Redis account already exists')
+        snapshot=a.STATE/'worker-backups'/operation
+        a.write(snapshot/'pg_hba.conf',hba.read_text())
+        a.write(snapshot/'users.acl',acl.read_text())
+        receipt={'operation':operation,'target':spec['target'],'complete':False}
+        a.write(transaction,json.dumps(receipt))
+    st['maintenance']=operation;a.save()
+    # Writes remain idempotent across disconnects. Never rotate an old account.
+    for role,name in zip(new,names):
+        number=f'{int(role[6:]):02}';password=a.S['PW_W'+number]
+        if not re.fullmatch('[a-f0-9]{64}',password):raise RuntimeError('Invalid generated Worker password')
+        if not a.psql("SELECT 1 FROM pg_roles WHERE rolname='"+name+"';").strip():
+            a.psql(f"CREATE ROLE {name} LOGIN PASSWORD '{password}' NOSUPERUSER NOCREATEDB NOCREATEROLE;")
+    a.psql('GRANT CONNECT ON DATABASE prodcast2 TO '+','.join(names)+';')
+    grants=(Path(p['stage'])/'worker-grants.sql').read_text()
+    a.psql(re.sub(r'prodcast_worker_01,\s*prodcast_worker_02',','.join(names),grants),'prodcast2')
+    hba_text=hba.read_text();reject='host all all 0.0.0.0/0 reject\n'
+    if hba_text.count(reject)!=1:raise RuntimeError('Unexpected managed PostgreSQL access configuration')
+    for role,name in zip(new,names):
+        line=f"hostssl prodcast2 {name} {a.C['hosts'][role]['address']}/32 scram-sha-256\n"
+        if line not in hba_text:hba_text=hba_text.replace(reject,line+reject)
+    replace(a,hba,hba_text)
+    if a.psql('SELECT count(*) FROM pg_hba_file_rules WHERE error IS NOT NULL;').strip()!='0':
+        raise RuntimeError('PostgreSQL access configuration validation failed')
+    if a.psql('SELECT pg_reload_conf();').strip()!='t':raise RuntimeError('PostgreSQL reload failed')
+    # Reuse the existing least-privilege Worker ACL, changing only name/password/queue.
+    text=acl.read_text();template=next((line for line in text.splitlines() if line.startswith('user prodcast_worker_01_scheduler ')),None)
+    if not template or template.count('#')!=1:raise RuntimeError('Unexpected managed Redis Worker ACL')
+    for role,name in zip(new,names):
+        number=f'{int(role[6:]):02}';prefix='user '+name+'_scheduler '
+        line=template.replace('prodcast_worker_01_scheduler',name+'_scheduler').replace('~worker01.*','~worker'+number+'.*')
+        line=re.sub(r'#[a-f0-9]{64}', '#'+hashlib.sha256(a.S['REDIS_W'+number].encode()).hexdigest(),line)
+        existing=[x for x in text.splitlines() if x.startswith(prefix)]
+        if existing and existing!=[line]:raise RuntimeError('Worker Redis account differs from expansion plan')
+        if not existing:text=text.rstrip('\n')+'\n'+line+'\n'
+    replace(a,acl,text)
+    result=a.dc('db','exec','-T','redis','sh','-c','read -r REDISCLI_AUTH; export REDISCLI_AUTH; exec redis-cli --tls --cacert /etc/prodcast-certs/ca.crt -h 127.0.0.1 -p 6380 --user db_admin ACL LOAD',input=a.S['REDIS_ADMIN']+'\n')
+    if result.strip()!='OK':raise RuntimeError('Redis ACL reload failed')
+    if a.firewalld_active():a.firewalld_rules('db')
+    else:
+        path=a.STATE/'firewall.sh';script=path.read_text();marker='iptables -A PCMAN-DB -j DROP\n'
+        if script.count(marker)!=1:raise RuntimeError('Unexpected managed firewall configuration')
+        for role in new:
+            address=a.C['hosts'][role]['address']+'/32'
+            line=f'iptables -A PCMAN-DB -s {address} -j ACCEPT\n'
+            if line not in script:script=script.replace(marker,line+marker)
+        a.write(path,script,0o700)
+        for role in new:
+            rule=['PCMAN-DB','-s',a.C['hosts'][role]['address']+'/32','-j','ACCEPT']
+            try:a.run(['iptables','-C',*rule])
+            except RuntimeError:a.run(['iptables','-I',*rule])
+    a.database_ready();receipt['prepared']=True;a.write(transaction,json.dumps(receipt))
+    return {'prepared':True,'new_workers':new,'containers_recreated':False}
+
+
+def replace(a,path,text):
+    """Preserve ownership and SELinux label of bind-mounted DB configuration."""
+    info=path.stat()
+    label=os.getxattr(path,'security.selinux') if a.selinux_enabled() else None
+    a.write(path,text,stat.S_IMODE(info.st_mode));os.chown(path,info.st_uid,info.st_gid)
+    if label is not None:os.setxattr(path,'security.selinux',label)

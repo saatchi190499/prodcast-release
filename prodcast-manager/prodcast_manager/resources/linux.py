@@ -174,16 +174,22 @@ def preflight():
         state=json.loads((STATE/'state.json').read_text())
         if state['site']!=C['site_id'] or state['topology']!=P['topology'] or state['role']!=P['role']: raise RuntimeError('Managed topology mismatch')
         if P.get('installation_id') and state.get('installation_id')!=P['installation_id']: raise RuntimeError('This VM belongs to another vault; use the original encrypted installation state')
-        if state.get('maintenance') and state['maintenance']!=P['operation'] and P['action']!='preflight':raise RuntimeError('A maintenance operation owns this VM; resume it from the original profile')
+        if P['role']=='db' and state.get('worker_hosts'):
+            roster={r:C['hosts'][r]['address'] for r in worker_roles()}
+            previous=P.get('worker_expansion',{}).get('previous_workers')
+            if roster!=state['worker_hosts'] and not (P['mode']=='add-workers' and previous==state['worker_hosts']):
+                raise RuntimeError('Use the updated installation profile with the complete Worker roster')
+        if state.get('maintenance') and state['maintenance']!=P['operation'] and P['action'] not in ('preflight','release-operation'):raise RuntimeError('A maintenance operation owns this VM; resume it from the original profile')
         if P['mode'] in ('install','update','repair') and state.get('version')==P['version'] and state.get('manifest')!=P['manifest']: raise RuntimeError('Same release version has a different manifest; refusing replacement')
-        if state.get('operation') and state['operation']!=P['operation'] and P['mode'] in ('install','update','repair','app-tls'): raise RuntimeError('Another operation owns this host; resume its journal')
+        if (state.get('operation') and state['operation']!=P['operation'] and P['mode'] in ('install','update','repair','app-tls')
+                and P['action']!='release-operation' and P.get('previous_operation')!=state.get('operation')): raise RuntimeError('Another operation owns this host; resume its journal')
         transaction=STATE/'app-tls-transaction.json'
         if P['role']=='app' and P['mode'] in ('install','update','repair','app-tls') and transaction.exists():
             pending=json.loads(transaction.read_text())
             if not pending.get('complete') and (P['mode']!='app-tls' or pending['operation']!=P['operation']):
                 raise RuntimeError('Resume the pending customer HTTPS operation before updating App')
         return dict(managed=True,version=state.get('version',''),hostname=platform.node(),
-                    operation=state.get('operation'),manifest=state.get('manifest'))
+                    operation=state.get('operation'),manifest=state.get('manifest'),maintenance=state.get('maintenance'))
     # Refuse adoption of an unmanaged installation or listeners on service ports.
     if ROOT.exists() and any(ROOT.iterdir()): raise RuntimeError('Unmanaged destination exists')
     if shutil.which('docker'):
@@ -202,6 +208,14 @@ def claim():
     ST.update(site=C['site_id'],topology=P['topology'],installation_id=P['installation_id'],role=P['role'],operation=P['operation'])
     ST.setdefault('steps',{}); save(); ROOT.mkdir(exist_ok=True); ROOT.chmod(0o755)
     return {}
+
+def release_operation():
+    """Release only the exact stale deployment owner named by the Manager."""
+    if ST.get('operation') not in ('',None,P['operation']):
+        raise RuntimeError('The VM is owned by a different operation; refusing to release it')
+    if ST.get('operation')==P['operation']:
+        ST['operation']=''; save()
+    return {'released':True,'operation':P['operation']}
 
 def offline_asset(name):
     entry=next((a for a in P['files'].values() if a['name']==name),None)
@@ -1066,11 +1080,15 @@ def repair():
 
 def dispatch():
     action=P['action']; role=P['role']
+    if action.startswith('workers-'):
+        from workers_linux import dispatch as workers_dispatch
+        return workers_dispatch(sys.modules[__name__])
     if action.startswith('data-') or action.startswith('maintenance-') or action=='reset':
         from maintenance_linux import dispatch as maintenance_dispatch
         return maintenance_dispatch(sys.modules[__name__])
     if action=='app-tls':return apply_app_tls()
     if action=='claim': return claim()
+    if action=='release-operation': return release_operation()
     if action=='bootstrap': return bootstrap()
     if action=='repair': return repair()
     if action=='install': return install_db() if role=='db' else install_ai()

@@ -37,10 +37,11 @@ function Preflight {
     if($script:state){
         if($script:state.site -ne $p.site.site_id -or $script:state.topology -ne $p.topology -or $script:state.role -ne $p.role){throw 'Managed topology mismatch'}
         if($p.installation_id -and $script:state.installation_id -ne $p.installation_id){throw 'VM belongs to another vault; use original encrypted installation state'}
-        if($script:state.maintenance -and $script:state.maintenance -ne $p.operation -and $p.action -ne 'preflight'){throw 'A maintenance operation owns this VM; resume it from the original profile'}
+        if($script:state.maintenance -and $script:state.maintenance -ne $p.operation -and $p.action -notin @('preflight','release-operation')){throw 'A maintenance operation owns this VM; resume it from the original profile'}
         if($p.mode -in @('install','update','repair') -and $script:state.version -eq $p.version -and $script:state.manifest -ne $p.manifest){throw 'Same release version has a different manifest'}
-        if($script:state.operation -and $script:state.operation -ne $p.operation -and $p.mode -in @('install','update','repair')){throw 'Another operation owns this VM; resume original journal'}
-        return @{managed=$true;version=$script:state.version;hostname=$env:COMPUTERNAME;operation=$script:state.operation;manifest=$script:state.manifest}
+        if($script:state.operation -and $script:state.operation -ne $p.operation -and $p.mode -in @('install','update','repair') -and $p.action -ne 'release-operation' -and $p.previous_operation -ne $script:state.operation){throw 'Another operation owns this VM; resume original journal'}
+        if($p.mode -eq 'add-workers' -and $p.worker_expansion.new_workers -contains $p.role -and $script:state.worker_expansion -ne $p.operation){throw 'This VM is not owned by this Worker expansion'}
+        return @{managed=$true;version=$script:state.version;hostname=$env:COMPUTERNAME;operation=$script:state.operation;manifest=$script:state.manifest;maintenance=$script:state.maintenance;worker_expansion=$script:state.worker_expansion}
     }
     if(Get-Service -Name 'ProdCastWorker*' -ErrorAction SilentlyContinue){throw 'Unmanaged Worker service found; automatic adoption refused'}
     if(Test-Path 'C:\ProdCast\Managed'){throw 'Unmanaged target directory exists'}
@@ -84,6 +85,9 @@ function Find-WorkerPython {
     return $null
 }
 function Install-Worker {
+    if($p.mode -eq 'add-workers' -and $script:state.worker_expansion -eq $p.operation -and (Test-WorkerRuntime)){
+        return @{service=$service;preserved=$true}
+    }
     $asset=$p.files.'worker-windows-amd64'
     $zip=Join-Path $p.stage $asset.name
     if((Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne $asset.sha256){throw 'Worker ZIP checksum mismatch'}
@@ -110,7 +114,7 @@ function Install-Worker {
         }finally{$z.Dispose()}
         [IO.File]::WriteAllText((Join-Path $package '.complete'),$asset.sha256)
     } elseif((Get-Content -Raw (Join-Path $package '.complete')) -ne $asset.sha256){throw 'Release version already cached with another digest'}
-    $adapted=$p.files.'worker-windows-amd64'.sha256 -in @('68a8ca761fe02fe0c8899b8e05823c787f661cba7ccd59ba83c8a7427014cd3e','a7d370571eb0355951fb4bb0019e21cf6e7813dfa397bd6ee2374805de7f0b79','f613c85082e99429172be0b0b5aebfeef34ebb4e6a2c4f291a90ef0147037504')
+    $adapted=$p.files.'worker-windows-amd64'.sha256 -in @('68a8ca761fe02fe0c8899b8e05823c787f661cba7ccd59ba83c8a7427014cd3e','a7d370571eb0355951fb4bb0019e21cf6e7813dfa397bd6ee2374805de7f0b79','f613c85082e99429172be0b0b5aebfeef34ebb4e6a2c4f291a90ef0147037504','96a25f34cbc9541227745a168e9e8ae442cc7f3b92329ea5a62464dd625bfd38')
     if([int]$number -gt 2 -and $adapted){
         foreach($scriptName in @('Install-Worker.ps1','Start-Worker.ps1')){
         $runtimeInstaller=Join-Path $package ('runtime\'+$scriptName)
@@ -328,9 +332,21 @@ function Dispatch {
         }
         'claim' {
             if(!$script:state){$script:state=[pscustomobject]@{site=$p.site.site_id;topology=$p.topology;installation_id=$p.installation_id;role=$p.role;version='';steps=[pscustomobject]@{}}}
+            if($p.mode -eq 'add-workers'){Set-Field $script:state 'worker_expansion' $p.operation}
             Set-Field $script:state 'operation' $p.operation; Save-State; return @{}
         }
+        'release-operation' {
+            if($script:state.operation -and $script:state.operation -ne $p.operation){throw 'The VM is owned by a different operation; refusing to release it'}
+            Set-Field $script:state 'operation' ''; Save-State
+            return @{released=$true;operation=$p.operation}
+        }
         'install' {return Install-Worker}
+        'verify' {
+            if(!(Test-WorkerRuntime)){throw 'Worker service readiness failed'}
+            $marker=Get-Content -Raw -LiteralPath (Join-Path $script:state.install_root 'logs\scheduler-service-ready.json') | ConvertFrom-Json
+            if($marker.mode -ne 'windows-appcontainer' -or !$marker.postgres_tls){throw 'Worker isolation/TLS readiness failed'}
+            return @{healthy=$true;service=$service;postgres_tls=$true}
+        }
         'repair' {
             if($script:state.version -ne $p.version -or $script:state.manifest -ne $p.manifest){throw 'Recovery requires the exact installed release'}
             return Repair-Worker
@@ -392,10 +408,10 @@ try{
             $result=Repair-Worker
             Set-Field $script:state.steps $key $result; Save-State
         }
-        elseif($done -and $p.action -notin @('claim','commit','status','repair')){$result=$done.Value}
+        elseif($done -and $p.action -notin @('claim','commit','status','repair','verify')){$result=$done.Value}
         else{
             $result=Dispatch
-            if($p.mode -in @('install','update','repair')){Set-Field $script:state.steps $key $result; Save-State}
+            if($p.mode -in @('install','update','repair','add-workers')){Set-Field $script:state.steps $key $result; Save-State}
         }
     }
     if($transcript){Stop-Transcript | Out-Null;$transcript=$false}

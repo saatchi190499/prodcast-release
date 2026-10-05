@@ -141,6 +141,7 @@ class App:
         ttk.Button(buttons,text=tr('Открыть site.json'),command=self.load).pack(side='left',padx=4)
         ttk.Button(buttons,text=tr('Новая площадка'),command=self.pick_directory).pack(side='left',padx=4)
         ttk.Button(buttons,text=tr('Сохранить конфигурацию'),command=self.save).pack(side='left',padx=4)
+        ttk.Button(buttons,text=tr('Добавить Workers…'),command=self.add_workers).pack(side='left',padx=4)
         self.dirlabel=ttk.Label(connections,text=str(self.directory),wraplength=1000);self.dirlabel.grid(row=10,column=0,columnspan=8,sticky='w',pady=8)
         fields=[('site_id',tr('ID площадки')),('public_url',tr('HTTPS адрес App')),('admin_ip',tr('IPv4 рабочего ПК администратора')),('admin_username',tr('Имя администратора App')),('admin_email',tr('Email администратора')),('app_subnet',tr('Свободная подсеть Docker /24'))]
         for row,(key,label) in enumerate(fields):
@@ -177,6 +178,7 @@ class App:
         bar=ttk.Frame(actions);bar.pack(fill='x',pady=8)
         for label,mode in [(tr('План'),'plan'),(tr('Проверить доступ'),'check'),(tr('Установить'),'install'),(tr('Обновить'),'update'),(tr('Восстановить'),'repair'),(tr('Состояние'),'status'),(tr('Резервная копия'),'backup'),(tr('Повторить AI'),'ai')]:
             ttk.Button(bar,text=label,command=lambda m=mode:self.start(m)).pack(side='left',padx=3)
+        ttk.Button(bar,text=tr('Остановить предыдущую операцию'),command=self.stop_previous).pack(side='left',padx=3)
         bar=ttk.Frame(actions);bar.pack(fill='x',pady=4)
         for label,mode in [('Выгрузить бэкап…','export'),('Восстановить из бэкапа…','restore'),('Импорт профиля из бэкапа…','import')]:
             ttk.Button(bar,text=tr(label),command=lambda m=mode:self.maintenance(m)).pack(side='left',padx=3)
@@ -362,6 +364,8 @@ class App:
             except Exception as e:messagebox.showerror(tr('Конфигурация'),str(e))
 
     def prepare_profile(self):
+        from .workers import require_no_expansion
+        require_no_expansion(self.directory)
         c=self.config();old_path=self.directory/'site.json'
         if c['admin_ip']==example()['admin_ip']:
             # Resolve the interface towards App without sending a UDP packet.
@@ -372,7 +376,7 @@ class App:
         old=runtime_config(old_path) if old_path.exists() else None
         if old and worker_roles(old)!=worker_roles(c) and (self.directory/'secrets.json').exists():
             saved=open_credentials(self.directory)
-            if saved.data.get('topology'):raise ValueError(tr('Количество Workers установленной площадки менять нельзя. Для новой установки создайте отдельную площадку.'))
+            if saved.data.get('topology'):raise ValueError(tr('Для расширения установленной площадки используйте «Добавить Workers…».'))
         changed=old and (old['site_id']!=c['site_id'] or
                         set(core_roles(old))!=set(core_roles(c)) or any(old['hosts'].get(r,{}).get('address')!=c['hosts'][r]['address'] for r in core_roles(c)))
         if not old or changed:
@@ -394,8 +398,8 @@ class App:
         try:self.prepare_profile();self.log(tr('Конфигурация сохранена рядом с Manager.'))
         except Exception as e:messagebox.showerror(tr('Конфигурация'),str(e))
 
-    def vault(self):
-        self.prepare_profile()
+    def vault(self,prepare=True):
+        if prepare:self.prepare_profile()
         try:v=open_credentials(self.directory,self.master.get())
         except LegacyPasswordRequired:
             password=simpledialog.askstring(tr('Импорт прежней площадки'),tr('Введите прежний пароль vault один раз. После импорта он больше не понадобится.'),show='*',parent=self.root)
@@ -527,6 +531,50 @@ class App:
             threading.Thread(target=task,daemon=False).start()
         except Exception as e:messagebox.showerror(tr('Проверка'),str(e))
 
+    def add_workers(self):
+        if self.busy:return
+        try:
+            from .workers import add_workers,candidate,read_json,JOURNAL
+            if not (self.directory/'site.json').is_file():raise ValueError(tr('Откройте профиль установленной площадки.'))
+            pending=read_json(self.directory/JOURNAL)
+            c=self.config()
+            if pending.get('status') in ('running','failed') and worker_roles(c)==worker_roles(pending['original']):
+                self.populate(pending['target']);c=self.config()
+            validate(c,True)
+            if pending.get('status') not in ('running','failed'):
+                _,new=candidate(runtime_config(self.directory/'site.json'),c)
+            else:new=pending['new_workers']
+            release_path=self.release.get();trusted=self.trusted.get().strip()
+            if not release_path:raise ValueError(tr('Выберите полный релиз ZIP или каталог'))
+            detail='\n'.join(r+': '+c['hosts'][r]['address'] for r in new)
+            if not messagebox.askyesno(tr('Добавить Workers…'),tr('Будут установлены только новые Workers. Выберите тот же релиз, который уже установлен. App и прежние Workers не перезапускаются.')+'\n\n'+detail+tr('\n\nПродолжить?')):return
+            v=self.vault(prepare=False);v.save();directory=self.directory
+            self.busy=True
+            def task():
+                try:
+                    release=Release(release_path,directory/'cache',trusted,validate_ai=False)
+                    saved=add_workers(directory,c,v,release,self.log,diagnostics=self.session_log)
+                    self.events.put(('profile',saved))
+                except Exception as e:self.log(tr('ОШИБКА: ')+str(e))
+                finally:self.events.put(('done',''))
+            threading.Thread(target=task,daemon=False).start()
+        except Exception as e:messagebox.showerror(tr('Добавить Workers…'),str(e))
+
+    def stop_previous(self):
+        if self.busy:return
+        if not messagebox.askyesno(tr('Остановить предыдущую операцию'),tr('Будет освобождён только владелец завершившейся или зависшей операции на VM. Vault, резервные копии и журналы не удаляются. Продолжить?')):return
+        try:
+            c=self.prepare_profile();validate(c,True);v=self.vault();v.save();directory=self.directory
+            self.busy=True
+            def task():
+                try:
+                    result=Engine(c,v,None,directory,self.log,diagnostics=self.session_log).stop_previous_operation()
+                    self.log(tr('Готово: ')+str(result.get('status','stopped')))
+                except Exception as e:self.log(tr('ОШИБКА: ')+str(e))
+                finally:self.events.put(('done',''))
+            threading.Thread(target=task,daemon=False).start()
+        except Exception as e:messagebox.showerror(tr('Проверка'),str(e))
+
     def reset_dialog(self):
         if self.busy:return
         top=tk.Toplevel(self.root);top.title(tr('Очистить VM…'));top.transient(self.root);top.grab_set()
@@ -582,6 +630,7 @@ class App:
         while not self.events.empty():
             kind,value=self.events.get()
             if kind=='done':self.busy=False
+            elif kind=='profile':self.populate(value)
             else:self.output.config(state='normal');self.output.insert('end',value+'\n');self.output.see('end');self.output.config(state='disabled')
         self.root.after(100,self.poll)
 
