@@ -115,6 +115,18 @@ def check_ci(api: GitHub, repository: str, sha: str) -> dict[str, object]:
     return {"check_runs": len(checks), "required_contexts": sorted(required), "state": "success"}
 
 
+def source_ci(api: GitHub, name: str, repository: str, sha: str, enabled: bool) -> dict[str, object]:
+    """Validate component CI without making the release workflow depend on itself."""
+    if not enabled:
+        return {"state": "not-checked"}
+    if name == "release":
+        return {
+            "state": "not-applicable",
+            "reason": "the release workflow cannot gate on its own in-progress check",
+        }
+    return check_ci(api, repository, sha)
+
+
 def find_base(api: GitHub, target: str, override: str | None) -> tuple[str, str]:
     target_key = validate_version(target)
     releases = api.request("GET", f"/repos/{REPOSITORIES['release']}/releases?per_page=100")
@@ -166,7 +178,7 @@ def resolve(args: argparse.Namespace) -> None:
             "source_commit": sha,
             "short_commit": sha[:12],
             "subject": commit["commit"]["message"].splitlines()[0],
-            "ci": check_ci(api, repository, sha) if args.check_ci else {"state": "not-checked"},
+            "ci": source_ci(api, name, repository, sha, args.check_ci),
         }
     base_tag, base_asset = find_base(api, args.version, args.base_tag or None)
     snapshot = {

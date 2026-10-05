@@ -4,7 +4,7 @@ import sys
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "release"))
-from release_sources import find_base, validate_version
+from release_sources import find_base, source_ci, validate_version
 
 
 class FakeGitHub:
@@ -44,3 +44,18 @@ def test_base_is_latest_earlier_published_stable_complete():
 def test_invalid_base_override_fails():
     with pytest.raises(RuntimeError):
         find_base(FakeGitHub([release("v0.6.0", draft=True)]), "v0.6.1", "v0.6.0")
+
+
+def test_release_repository_does_not_gate_on_running_release_workflow():
+    class UnexpectedGitHubCall:
+        def request(self, *args, **kwargs):
+            raise AssertionError("release repository CI must not query its own running checks")
+
+    result = source_ci(
+        UnexpectedGitHubCall(),
+        "release",
+        "saatchi190499/prodcast-release",
+        "a" * 40,
+        True,
+    )
+    assert result["state"] == "not-applicable"
