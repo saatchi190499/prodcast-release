@@ -1,0 +1,59 @@
+name: Build latest Manager
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-latest-manager
+  cancel-in-progress: false
+
+jobs:
+  manager:
+    name: Build latest Manager EXE
+    runs-on: windows-2025
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: prodcast-manager
+    steps:
+      - name: Check out latest main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install locked build dependencies
+        run: python -m pip install -r requirements-build.lock.txt
+      - name: Build, test and smoke-test Manager
+        run: ./build.ps1 -Python python -Output dist
+      - name: Record the built source
+        run: |
+          $commit = git rev-parse HEAD
+          if ($LASTEXITCODE) { throw 'Could not resolve the built commit' }
+          $version = python -c "from prodcast_manager import __version__; print(__version__)"
+          if ($LASTEXITCODE) { throw 'Could not read Manager version' }
+          $files = @(Get-ChildItem -LiteralPath dist -Filter '*.exe' -File)
+          if (-not $files.Count) { throw 'No Manager executable was built' }
+          @(
+            '# Build latest Manager'
+            ''
+            "Manager version: $version"
+            "Source commit: $commit"
+            ''
+            'Download the manager-latest artifact for the tested executable files.'
+          ) | Out-File -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+      - name: Upload latest Manager executable files
+        uses: actions/upload-artifact@v4
+        with:
+          name: manager-latest
+          path: prodcast-manager/dist/*.exe
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
