@@ -18,12 +18,14 @@ def read_json(path):
 
 
 def require_no_expansion(directory):
+    if read_json(Path(directory)/'worker-action-journal.json').get('status') in ('running','failed'):
+        raise ValueError('Resume the selected Worker action before running another operation')
     if read_json(Path(directory)/JOURNAL).get('status') in ('running','failed'):
         raise ValueError('Resume Add Workers before running another operation')
 
 
 def candidate(original, proposed):
-    """Only append consecutive worker slots; never re-address an existing host."""
+    """Add unused worker IDs; never re-address an existing host."""
     validate(original,True);validate(proposed,True)
     old=worker_addresses(original);new=worker_addresses(proposed)
     if len(new)<=len(old) or any(new.get(r)!=a for r,a in old.items()):
@@ -54,7 +56,7 @@ def add_workers(directory, proposed, vault, release, log=print, remote_factory=N
     from .engine import Engine,RESOURCES
     directory=Path(directory);path=directory/JOURNAL;remotes={}
     with file_lock(directory/'operation.lock'):
-        for name in ('journal.json','ai-journal.json','maintenance-journal.json','app-tls-journal.json'):
+        for name in ('journal.json','ai-journal.json','maintenance-journal.json','app-tls-journal.json','worker-action-journal.json'):
             if read_json(directory/name).get('status') in ('running','failed'):
                 raise ValueError('Complete the pending operation first: '+name)
         journal=read_json(path);pending=journal.get('status') in ('running','failed')
@@ -111,10 +113,19 @@ def add_workers(directory, proposed, vault, release, log=print, remote_factory=N
         options={'remote_factory':remote_factory} if remote_factory else {}
         engine=Engine(original,vault,release,directory,log,diagnostics=diagnostics,**options)
         engine.c=target  # Only this operation may use the not-yet-approved roster.
+        retired=copy.deepcopy(vault.data.get('retired_workers',{}))
+        # Upgrade profiles created by the first per-Worker removal preview.
+        prior_removal=vault.data.get('worker_action',{})
+        removed_role=prior_removal.get('role')
+        if (prior_removal.get('mode')=='worker-remove' and removed_role not in worker_addresses(original)
+                and prior_removal.get('target')==binding(original)):
+            retired.setdefault(removed_role,{'operation':prior_removal['operation']})
+        reactivated={r:retired[r] for r in new if r in retired}
         def payload(role):
             result=engine.payload(role,operation,'add-workers')
             result['worker_expansion']={'id':operation,'target':binding(target),
-                                        'new_workers':list(new),'previous_workers':worker_addresses(journal['original'])}
+                                        'new_workers':list(new),'previous_workers':worker_addresses(journal['original']),
+                                        'reactivated_workers':reactivated}
             return result
         def action(role,name):
             log(role+': '+name)
@@ -139,10 +150,11 @@ def add_workers(directory, proposed, vault, release, log=print, remote_factory=N
                             or status.get('manifest')!=release.digest or status.get('operation') not in ('',None,operation)):
                         raise ValueError(role+': select the exact installed release and finish pending operations')
                 elif status.get('managed'):
-                    if status.get('worker_expansion')!=operation:
+                    reclaim=role in reactivated and (status.get('retired') is True or status.get('worker_expansion')==operation)
+                    if status.get('worker_expansion')!=operation and not reclaim:
                         raise ValueError(role+': the new VM already belongs to an installation')
                     if status.get('operation') not in ('',None,operation):raise ValueError(role+': another operation owns this VM')
-                    if status.get('version') and (status['version']!=release.version or status.get('manifest')!=release.digest):
+                    if not reclaim and status.get('version') and (status['version']!=release.version or status.get('manifest')!=release.digest):
                         raise ValueError(role+': resumed Worker release does not match the expansion plan')
             # Transfer only the Worker package. App/DB/AI payloads are not deployed.
             for role in new:
@@ -160,6 +172,8 @@ def add_workers(directory, proposed, vault, release, log=print, remote_factory=N
             vault.data.update(worker_topology_hosts=target['_worker_topology_hosts'],worker_hosts=worker_addresses(target))
             vault.save();saved=save_config(directory,target)
             action('db','workers-commit')
+            for role in new:retired.pop(role,None)
+            vault.data['retired_workers']=retired;vault.save()
             journal['status']='complete';atomic_json(path,journal)
             # Keep the last transaction receipt in the vault for crash recovery.
             log('Workers added: '+', '.join(new))
@@ -171,6 +185,8 @@ def add_workers(directory, proposed, vault, release, log=print, remote_factory=N
         finally:
             for remote in remotes.values():
                 try:remote.cleanup()
-                except Exception:log('Could not clean a temporary staging directory')
+                except Exception as error:
+                    if hasattr(remote,'cleanup_warning'):remote.cleanup_warning(error)
+                    else:log(remote.role+': Could not clean a temporary staging directory')
                 try:remote.close()
                 except Exception:pass

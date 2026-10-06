@@ -177,7 +177,14 @@ def preflight():
         if P['role']=='db' and state.get('worker_hosts'):
             roster={r:C['hosts'][r]['address'] for r in worker_roles()}
             previous=P.get('worker_expansion',{}).get('previous_workers')
-            if roster!=state['worker_hosts'] and not (P['mode']=='add-workers' and previous==state['worker_hosts']):
+            retiring=P.get('worker_action',{})
+            retirement_target={r:h['address'] for r,h in retiring.get('target',{}).get('hosts',{}).items() if r.startswith('worker')}
+            retirement_receipt=STATE/'worker-retirement.json'
+            retired=json.loads(retirement_receipt.read_text()) if retirement_receipt.exists() else {}
+            retirement_ok=(P['mode']=='worker-remove' and (state.get('maintenance')==P['operation'] or
+                           (retired.get('operation')==P['operation'] and retired.get('complete') and retired.get('target')==retirement_target))
+                           and retiring.get('previous_workers')==roster and retirement_target==state['worker_hosts'])
+            if roster!=state['worker_hosts'] and not retirement_ok and not (P['mode']=='add-workers' and previous==state['worker_hosts']):
                 raise RuntimeError('Use the updated installation profile with the complete Worker roster')
         if state.get('maintenance') and state['maintenance']!=P['operation'] and P['action'] not in ('preflight','release-operation'):raise RuntimeError('A maintenance operation owns this VM; resume it from the original profile')
         if P['mode'] in ('install','update','repair') and state.get('version')==P['version'] and state.get('manifest')!=P['manifest']: raise RuntimeError('Same release version has a different manifest; refusing replacement')
@@ -1080,6 +1087,9 @@ def repair():
 
 def dispatch():
     action=P['action']; role=P['role']
+    if action.startswith('worker-retire-'):
+        from worker_lifecycle_linux import dispatch as lifecycle_dispatch
+        return lifecycle_dispatch(sys.modules[__name__])
     if action.startswith('workers-'):
         from workers_linux import dispatch as workers_dispatch
         return workers_dispatch(sys.modules[__name__])

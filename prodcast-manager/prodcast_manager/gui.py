@@ -15,7 +15,7 @@ from .ssh import scan
 from . import __version__
 from .i18n import set_language, language, localize, rendered, tr
 from .session_logs import SessionLog, application_directory
-from .portable import (profile_directory, runtime_config, save_config, import_site,
+from .portable import (data_directory, profile_directory, runtime_config, save_config, import_site,
                        open_credentials, LegacyPasswordRequired, remember, last_directory)
 from cryptography.fernet import InvalidToken
 from .app_certificate import read_pfx, store_app_certificate, validate_for_site
@@ -91,9 +91,7 @@ class App:
         self.root=root; self.events=queue.Queue(); self.busy=False; self.auth={}; self.vars={}; self.hostvars={}
         self.session_log=SessionLog(log_dir)
         self.home=Path(app_home) if app_home else application_directory()
-        (self.home/'prodcast-data'/'logs').mkdir(parents=True,exist_ok=True)
-        (self.home/'prodcast-data'/'sites').mkdir(parents=True,exist_ok=True)
-        preferences=self.home/'prodcast-data/ui.json'
+        preferences=data_directory(self.home)/'ui.json'
         try:chosen=json.loads(preferences.read_text('utf-8')).get('language','ru') if preferences.exists() else 'ru'
         except (OSError,ValueError):chosen='ru'
         set_language(chosen if chosen in ('ru','en') else 'ru')
@@ -144,6 +142,13 @@ class App:
         ttk.Button(buttons,text=tr('Новая площадка'),command=self.pick_directory).pack(side='left',padx=4)
         ttk.Button(buttons,text=tr('Сохранить конфигурацию'),command=self.save).pack(side='left',padx=4)
         ttk.Button(buttons,text=tr('Добавить Workers…'),command=self.add_workers).pack(side='left',padx=4)
+        workerbar=ttk.Frame(connections);workerbar.grid(row=11,column=0,columnspan=8,sticky='w',pady=8)
+        ttk.Label(workerbar,text=tr('Выбранный Worker')).pack(side='left')
+        self.selected_worker=tk.StringVar()
+        self.worker_selector=ttk.Combobox(workerbar,textvariable=self.selected_worker,state='readonly',width=12)
+        self.worker_selector.pack(side='left',padx=8)
+        ttk.Button(workerbar,text=tr('Переустановить Worker…'),command=lambda:self.worker_action('worker-repair')).pack(side='left',padx=4)
+        ttk.Button(workerbar,text=tr('Удалить Worker…'),command=lambda:self.worker_action('worker-remove')).pack(side='left',padx=4)
         self.dirlabel=ttk.Label(connections,text=str(self.directory),wraplength=1000);self.dirlabel.grid(row=10,column=0,columnspan=8,sticky='w',pady=8)
         fields=[('site_id',tr('ID площадки')),('public_url',tr('HTTPS адрес App')),('admin_ip',tr('IPv4 рабочего ПК администратора')),('admin_username',tr('Имя администратора App')),('admin_email',tr('Email администратора')),('app_subnet',tr('Свободная подсеть Docker /24'))]
         for row,(key,label) in enumerate(fields):
@@ -218,13 +223,13 @@ class App:
             return
         chosen='en' if self.language_choice.get()=='English' else 'ru'
         set_language(chosen);localize(self.root)
-        atomic_json(self.home/'prodcast-data/ui.json',{'language':chosen})
+        atomic_json(data_directory(self.home)/'ui.json',{'language':chosen})
 
     def render_servers(self):
         for widget in self.hostframe.winfo_children():widget.destroy()
         headings=['VM','IPv4',tr('SSH порт'),tr('SSH пользователь'),tr('Вход'),tr('Путь к SSH-ключу'),'','']
         for col,title in enumerate(headings):ttk.Label(self.hostframe,text=title,font=('Segoe UI',9,'bold')).grid(row=0,column=col,sticky='w')
-        active=('app','db','ai')+tuple('worker'+str(n) for n in range(1,int(self.worker_count.get())+1))
+        active=('app','db','ai')+self.visible_workers()
         self.ai_widgets=[]
         for row,role in enumerate(active,1):
             if role not in self.hostvars:
@@ -241,6 +246,16 @@ class App:
         self.hostframe.columnconfigure(5,weight=1)
         self.toggle_ai()
 
+    def visible_workers(self):
+        original=worker_roles(getattr(self,'original_config',example()))
+        count=int(self.worker_count.get())
+        selected=list(original[:count])
+        for number in range(1,MAX_WORKERS+1):
+            if len(selected)>=count:break
+            role='worker'+str(number)
+            if role not in selected:selected.append(role)
+        return tuple(sorted(selected,key=lambda r:int(r[6:])))
+
     def toggle_ai(self):
         for widget in self.ai_widgets+[getattr(self,name,None) for name in ('ai_model_entry','ai_model_button','ai_ollama_entry','ai_ollama_button')]:
             if widget is None:continue
@@ -255,11 +270,14 @@ class App:
         self.install_ai.set(c.get('install_ai',True))
         for r in roles(c):
             for k,w in self.hostvars[r].items():w.set(c['hosts'][r].get(k,''))
+        if hasattr(self,'worker_selector'):
+            self.worker_selector.configure(values=worker_roles(c))
+            self.selected_worker.set(worker_roles(c)[0])
 
     def config(self):
         c={**getattr(self,'original_config',example()),'schema':1,**{k:v.get().strip() for k,v in self.vars.items()},'install_gpu_driver':False,'install_ai':self.install_ai.get(),'hosts':{}}
         for k in ('license_users','license_sessions'): c[k]=int(c[k])
-        active=('app','db','ai')+tuple('worker'+str(n) for n in range(1,int(self.worker_count.get())+1))
+        active=('app','db','ai')+self.visible_workers()
         for r in active:
             v=self.hostvars[r];c['hosts'][r]={k:w.get().strip() for k,w in v.items()};c['hosts'][r]['port']=int(c['hosts'][r]['port'] or '22') if r!='ai' or self.install_ai.get() else 22
         return validate(c)
@@ -347,7 +365,7 @@ class App:
 
     def pick_directory(self):
         if self.busy:return
-        self.directory=self.home/'prodcast-data'/'sites'/'new'
+        self.directory=data_directory(self.home)/'sites'/'new'
         fresh=example();fresh['install_ai']=False;fresh['hosts']['ai']['address']=''
         self.populate(fresh);self.auth={};self.master.set('')
         self.pfx_password.set('');self.pfx_path.set('');self.pfx_url.set('');self.pfx_ca.set('')
@@ -478,7 +496,13 @@ class App:
 
     def show_admin(self):
         try:
-            v=self.vault();c=self.config()
+            # Viewing credentials must not save/revalidate an in-flight profile.
+            directory=self.directory
+            secret_file=directory/'secrets.json';key_file=directory/'secrets.key'
+            if not secret_file.is_file() or not key_file.is_file():
+                raise KeyError('ADMIN_PASSWORD')
+            v=Vault(secret_file,key_file.read_text('ascii').strip())
+            c=runtime_config(directory/'site.json')
             AdminAccessDialog(self.root,v.data.get('app_tls',{}).get('url') or c['public_url'],
                               c['admin_username'],v.data['secrets']['ADMIN_PASSWORD'])
         except KeyError:messagebox.showerror(tr('Доступ App'),tr('Начальный пароль появится после начала установки этой площадки.'))
@@ -532,6 +556,32 @@ class App:
                 finally:self.events.put(('done',''))
             threading.Thread(target=task,daemon=False).start()
         except Exception as e:messagebox.showerror(tr('Проверка'),str(e))
+
+    def worker_action(self,mode):
+        if self.busy:return
+        try:
+            from .worker_lifecycle import run_worker_action,removal_target
+            c=runtime_config(self.directory/'site.json');validate(c,True)
+            role=self.selected_worker.get()
+            if role not in worker_roles(c):raise ValueError(tr('Выбранный Worker отсутствует в установленном профиле.'))
+            if mode=='worker-remove':removal_target(c,role)
+            release_path=self.release.get();trusted=self.trusted.get().strip()
+            if mode=='worker-repair' and not release_path:raise ValueError(tr('Выберите полный релиз ZIP или каталог'))
+            title=tr('Переустановить Worker…') if mode=='worker-repair' else tr('Удалить Worker…')
+            notice=tr('Будет переустановлен только выбранный Worker из точного установленного релиза. Его ID и настройки сохраняются.') if mode=='worker-repair' else tr('Будет удалена служба выбранного Worker и отозван его доступ. Остальные Workers сохранят свои ID. Файлы и журналы Worker сохраняются.')
+            notice+=tr('\nНазначение новых задач App временно приостанавливается. Операция продолжится после завершения задач.')
+            if not messagebox.askyesno(title,role+': '+c['hosts'][role]['address']+'\n\n'+notice+tr('\n\nПродолжить?')):return
+            v=self.vault(prepare=False);v.save();directory=self.directory
+            self.busy=True
+            def task():
+                try:
+                    release=Release(release_path,directory/'cache',trusted,validate_ai=False) if mode=='worker-repair' else None
+                    saved=run_worker_action(directory,role,mode,v,release,self.log,diagnostics=self.session_log)
+                    self.events.put(('profile',saved))
+                except Exception as e:self.log(tr('ОШИБКА: ')+str(e))
+                finally:self.events.put(('done',''))
+            threading.Thread(target=task,daemon=False).start()
+        except Exception as e:messagebox.showerror(tr('Выбранный Worker'),str(e))
 
     def add_workers(self):
         if self.busy:return
@@ -607,8 +657,9 @@ class App:
                     if again!=password:raise ValueError(tr('Пароли не совпадают.'))
             if mode=='import':
                 import uuid
-                destination=self.home/'prodcast-data/sites'/('recovered-'+uuid.uuid4().hex[:12])
-                c=import_backup_profile(path,password,self.home/'prodcast-data/temporary',destination)
+                root=data_directory(self.home)
+                destination=root/'sites'/('recovered-'+uuid.uuid4().hex[:12])
+                c=import_backup_profile(path,password,root/'temporary',destination)
                 self.directory=destination;self.populate(c);self.auth={};self.master.set('');self.dirlabel.config(text=str(destination));remember(self.home,destination)
                 self.show_certificate(None)
                 self.log(tr('Профиль восстановлен. Укажите SSH-доступ. Для чистых VM сначала установите исходный релиз, затем восстановите данные из бэкапа.'));return
@@ -644,5 +695,5 @@ def main():
     root=tk.Tk()
     try:App(root)
     except OSError as e:
-        root.withdraw();messagebox.showerror(tr('Папка логов недоступна'),tr('Не удалось создать logs рядом с EXE. Переместите приложение в папку с правом записи.\n')+str(e));root.destroy();return
+        root.withdraw();messagebox.showerror(tr('Папка логов недоступна'),tr('Не удалось создать prodcast-data/logs рядом с EXE. Переместите приложение в папку с правом записи.\n')+str(e));root.destroy();return
     root.mainloop()

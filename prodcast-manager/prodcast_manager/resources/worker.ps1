@@ -40,8 +40,10 @@ function Preflight {
         if($script:state.maintenance -and $script:state.maintenance -ne $p.operation -and $p.action -notin @('preflight','release-operation')){throw 'A maintenance operation owns this VM; resume it from the original profile'}
         if($p.mode -in @('install','update','repair') -and $script:state.version -eq $p.version -and $script:state.manifest -ne $p.manifest){throw 'Same release version has a different manifest'}
         if($script:state.operation -and $script:state.operation -ne $p.operation -and $p.mode -in @('install','update','repair') -and $p.action -ne 'release-operation' -and $p.previous_operation -ne $script:state.operation){throw 'Another operation owns this VM; resume original journal'}
-        if($p.mode -eq 'add-workers' -and $p.worker_expansion.new_workers -contains $p.role -and $script:state.worker_expansion -ne $p.operation){throw 'This VM is not owned by this Worker expansion'}
-        return @{managed=$true;version=$script:state.version;hostname=$env:COMPUTERNAME;operation=$script:state.operation;manifest=$script:state.manifest;maintenance=$script:state.maintenance;worker_expansion=$script:state.worker_expansion}
+        $reclaim=$script:state.retired -eq $true -and $p.worker_expansion.reactivated_workers.($p.role).operation
+        if($reclaim -and $script:state.retirement_operation -and $script:state.retirement_operation -ne $p.worker_expansion.reactivated_workers.($p.role).operation){throw 'Worker retirement receipt does not match'}
+        if($p.mode -eq 'add-workers' -and $p.worker_expansion.new_workers -contains $p.role -and $script:state.worker_expansion -ne $p.operation -and !$reclaim){throw 'This VM is not owned by this Worker expansion; a cloned active Worker must be repaired or removed before re-adding'}
+        return @{managed=$true;version=$script:state.version;hostname=$env:COMPUTERNAME;operation=$script:state.operation;manifest=$script:state.manifest;maintenance=$script:state.maintenance;worker_expansion=$script:state.worker_expansion;retired=($script:state.retired -eq $true)}
     }
     if(Get-Service -Name 'ProdCastWorker*' -ErrorAction SilentlyContinue){throw 'Unmanaged Worker service found; automatic adoption refused'}
     if(Test-Path 'C:\ProdCast\Managed'){throw 'Unmanaged target directory exists'}
@@ -330,9 +332,19 @@ function Dispatch {
             }
             return @{reset=$true;data_preserved=($p.mode -ne 'reset-full');dependencies_preserved=$true;server_backups_preserved=$true}
         }
+        'worker-retire' {
+            if($p.mode -ne 'worker-remove' -or $p.worker_action.role -ne $p.role -or $script:state.maintenance -ne $p.operation){throw 'Invalid Worker removal ownership'}
+            $result=Dispatch-WorkerRetire
+            return $result
+        }
         'claim' {
             if(!$script:state){$script:state=[pscustomobject]@{site=$p.site.site_id;topology=$p.topology;installation_id=$p.installation_id;role=$p.role;version='';steps=[pscustomobject]@{}}}
             if($p.mode -eq 'add-workers'){Set-Field $script:state 'worker_expansion' $p.operation}
+            if($p.mode -eq 'add-workers' -and $script:state.retired){
+                Set-Field $script:state 'retired' $false
+                Set-Field $script:state 'steps' ([pscustomobject]@{})
+                Set-Field $script:state 'pending_root' ''
+            }
             Set-Field $script:state 'operation' $p.operation; Save-State; return @{}
         }
         'release-operation' {
@@ -352,8 +364,7 @@ function Dispatch {
             return Repair-Worker
         }
         'stop' {
-            $svc=Get-Service $service
-            Stop-Service $service; $svc.WaitForStatus('Stopped',[TimeSpan]::FromSeconds(120))
+            Stop-OwnedWorker
             Set-Service $service -StartupType Manual
             return @{stopped=$true}
         }
@@ -394,6 +405,20 @@ function Dispatch {
         }
         default {throw 'Unsupported Worker action'}
     }
+}
+function Dispatch-WorkerRetire {
+    $svc=Get-Service -Name $service -ErrorAction SilentlyContinue
+    if($svc){
+        Stop-OwnedWorker
+        & sc.exe delete $service | Out-Null;Check-Native 'Remove selected Worker service'
+        for($i=0;$i -lt 30 -and (Get-Service $service -ErrorAction SilentlyContinue);$i++){Start-Sleep -Seconds 1}
+        if(Get-Service $service -ErrorAction SilentlyContinue){throw 'Service removal pending; close service consoles and retry'}
+    }
+    Set-Field $script:state 'retired' $true
+    Set-Field $script:state 'retirement_operation' $p.operation
+    Set-Field $script:state 'operation' ''
+    Save-State
+    return @{removed=$true;runtime_preserved=$true;logs_preserved=$true}
 }
 try{
     $info=Preflight

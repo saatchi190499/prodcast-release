@@ -60,6 +60,38 @@ def test_db_hot_add_is_idempotent_and_never_recreates_containers(agent):
     assert a.ST['maintenance']=='' and a.ST['worker_hosts']['worker3']=='10.0.0.3'
 
 
+def test_add_after_worker1_retirement_uses_surviving_acl_template(agent):
+    a=agent
+    a.P['worker_expansion']['previous_workers']={'worker2':'10.0.0.2'}
+    acl=a.ROOT/'db/config/users.acl'
+    acl.write_text(acl.read_text().replace('prodcast_worker_01_scheduler','prodcast_worker_02_scheduler').replace('~worker01.*','~worker02.*'))
+    assert module.dispatch(a)['prepared']
+    text=acl.read_text()
+    assert 'user prodcast_worker_03_scheduler ' in text and '~worker03.*' in text
+
+
+def test_reactivate_retired_database_role_requires_saved_receipt(agent):
+    a=agent
+    a.accounts.add('prodcast_worker_03')
+    a.ST['retired_workers']={'worker3':{'operation':'d'*32}}
+    a.P['worker_expansion']['reactivated_workers']={'worker3':{'operation':'d'*32}}
+    original=a.psql
+    def query(sql,db='postgres'):
+        if 'SELECT CASE WHEN NOT rolcanlogin' in sql:return 'safe'
+        return original(sql,db)
+    a.psql=query
+    assert module.dispatch(a)['prepared']
+    assert any(sql.startswith('ALTER ROLE prodcast_worker_03 LOGIN') for kind,sql in a.calls if kind=='psql')
+    a.P['action']='workers-commit';module.dispatch(a)
+    assert 'worker3' not in a.ST['retired_workers']
+
+
+def test_reactivate_without_db_retirement_receipt_is_rejected(agent):
+    a=agent
+    a.P['worker_expansion']['reactivated_workers']={'worker3':{'operation':'d'*32}}
+    with pytest.raises(RuntimeError,match='retirement receipt'):module.dispatch(a)
+
+
 def test_redis_reload_failure_keeps_transaction_for_retry(agent):
     a=agent;a.acl_result='ERR invalid ACL'
     with pytest.raises(RuntimeError,match='ACL reload'):module.dispatch(a)

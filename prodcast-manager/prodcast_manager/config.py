@@ -38,8 +38,8 @@ def validate(c, require_trust=False):
         if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_-]{0,47}', c.get(k,'')):
             raise ValueError(f'{k}: use letters, digits, dash and underscore')
     workers=worker_roles(c)
-    if not 1<=len(workers)<=MAX_WORKERS or workers!=tuple('worker'+str(n) for n in range(1,len(workers)+1)) or set(c['hosts'])!=set(roles(c)):
-        raise ValueError('Configure App, DB, optional AI and 1 to 16 consecutively numbered Workers')
+    if not 1<=len(workers)<=MAX_WORKERS or any(int(r[6:])>MAX_WORKERS for r in workers) or set(c['hosts'])!=set(roles(c)):
+        raise ValueError('Configure App, DB, optional AI and 1 to 16 Workers with stable IDs from 1 to 16')
     addresses=[]
     for role,h in c['hosts'].items():
         if role=='ai' and not c.get('install_ai',True):continue
@@ -101,7 +101,6 @@ def validate_membership(c, data):
         if (not isinstance(baseline,dict) or not baseline
                 or baseline!=data.get('worker_topology_hosts')
                 or worker_addresses(c)!=approved
-                or any(approved.get(r)!=a for r,a in baseline.items())
                 or data.get('topology')!=topology_hash(c)):
             raise ValueError('Worker membership differs from the approved installation profile')
 

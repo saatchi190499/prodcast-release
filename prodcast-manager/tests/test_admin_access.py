@@ -4,6 +4,26 @@ import tkinter as tk
 from prodcast_manager.gui import AdminAccessDialog
 
 
+def test_admin_access_during_worker_operation_is_read_only(tmp_path,monkeypatch):
+    from prodcast_manager.gui import App
+    from prodcast_manager.portable import save_config,open_credentials
+    from prodcast_manager.config import example,atomic_json
+    from unittest.mock import Mock
+    directory=tmp_path/'site';c=save_config(directory,example())
+    vault=open_credentials(directory);vault.data={'secrets':{'ADMIN_PASSWORD':'synthetic-admin-password'}};vault.save()
+    atomic_json(directory/'worker-action-journal.json',{'status':'running'})
+    files={p.name:p.read_bytes() for p in directory.iterdir() if p.is_file()}
+    app=App.__new__(App);app.root=Mock();app.directory=directory;app.busy=True
+    app.vault=Mock(side_effect=AssertionError('Must not prepare/save profile'))
+    app.config=Mock(side_effect=AssertionError('Must not use edited form'))
+    app.credentials_error=Mock();dialog=Mock()
+    monkeypatch.setattr('prodcast_manager.gui.AdminAccessDialog',dialog)
+    app.show_admin()
+    dialog.assert_called_once_with(app.root,c['public_url'],c['admin_username'],'synthetic-admin-password')
+    app.credentials_error.assert_not_called()
+    assert {p.name:p.read_bytes() for p in directory.iterdir() if p.is_file()}==files
+
+
 def test_admin_access_copy_and_russian_shortcuts():
     root = tk.Tk()
     root.withdraw()

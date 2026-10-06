@@ -18,8 +18,8 @@ def dispatch(a):
     if st.get('version')!=p['version'] or st.get('manifest')!=p['manifest']:
         raise RuntimeError('Worker expansion requires the exact installed release')
     new=spec['new_workers']; previous=spec['previous_workers']
-    if not new or new!=['worker'+str(n) for n in range(len(previous)+1,len(previous)+len(new)+1)]:
-        raise RuntimeError('Workers must be appended consecutively')
+    if (not new or len(set(new))!=len(new) or any(r in previous or not re.fullmatch(r'worker([1-9]|1[0-6])',r) for r in new)):
+        raise RuntimeError('New Workers must use distinct unused IDs from 1 to 16')
     if len(previous)+len(new)>16:raise RuntimeError('Too many Workers')
     for role in new:ipaddress.IPv4Address(a.C['hosts'][role]['address'])
     transaction=a.STATE/'workers-transaction.json'
@@ -28,10 +28,24 @@ def dispatch(a):
         raise RuntimeError('Resume the existing Worker expansion')
     if receipt.get('operation')==operation and receipt.get('target')!=spec['target']:
         raise RuntimeError('Worker expansion target changed')
+    reactivated=spec.get('reactivated_workers',{})
+    if any(role not in new for role in reactivated):raise RuntimeError('Invalid reactivated Worker roster')
+    if receipt.get('operation')==operation:
+        if receipt.get('reactivated_workers',{})!=reactivated:raise RuntimeError('Worker reactivation receipts changed')
+    else:
+        retired_path=a.STATE/'worker-retirement.json'
+        last_retired=json.loads(retired_path.read_text()) if retired_path.exists() else {}
+        for role,proof in reactivated.items():
+            saved=st.get('retired_workers',{}).get(role,{})
+            legacy=(last_retired.get('operation')==proof.get('operation') and last_retired.get('complete')
+                    and last_retired.get('revoked') and last_retired.get('target')==previous)
+            if not proof.get('operation') or not (saved.get('operation')==proof['operation'] or legacy):
+                raise RuntimeError('Worker reactivation requires the original DB retirement receipt')
     if p['action']=='workers-commit':
         if receipt.get('operation')!=operation or not receipt.get('prepared'):
             raise RuntimeError('Worker expansion is not prepared')
         receipt['complete']=True;a.write(transaction,json.dumps(receipt))
+        for role in new:st.get('retired_workers',{}).pop(role,None)
         st['maintenance']='';st['worker_hosts']={r:a.C['hosts'][r]['address'] for r in a.worker_roles()};a.save()
         return {'complete':True}
     if p['action']!='workers-prepare':raise RuntimeError('Unknown Worker expansion action')
@@ -40,15 +54,17 @@ def dispatch(a):
     names=['prodcast_worker_'+f'{int(r[6:]):02}' for r in new]
     if receipt.get('operation')!=operation:
         # Refuse to take over pre-existing accounts, even if their names match.
-        for name in names:
+        for role,name in zip(new,names):
             if a.psql("SELECT 1 FROM pg_roles WHERE rolname='"+name+"';").strip():
-                raise RuntimeError('A proposed Worker database account already exists')
+                if role not in reactivated:raise RuntimeError('A proposed Worker database account already exists')
+                safe=a.psql("SELECT CASE WHEN NOT rolcanlogin AND NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole THEN 'safe' ELSE 'unsafe' END FROM pg_roles WHERE rolname='"+name+"';").strip()
+                if safe!='safe':raise RuntimeError('Retired Worker account must remain disabled and least-privilege')
             if re.search(r'^user '+name+r'_scheduler\s',acl.read_text(),re.M):
                 raise RuntimeError('A proposed Worker Redis account already exists')
         snapshot=a.STATE/'worker-backups'/operation
         a.write(snapshot/'pg_hba.conf',hba.read_text())
         a.write(snapshot/'users.acl',acl.read_text())
-        receipt={'operation':operation,'target':spec['target'],'complete':False}
+        receipt={'operation':operation,'target':spec['target'],'complete':False,'reactivated_workers':reactivated}
         a.write(transaction,json.dumps(receipt))
     st['maintenance']=operation;a.save()
     # Writes remain idempotent across disconnects. Never rotate an old account.
@@ -57,6 +73,8 @@ def dispatch(a):
         if not re.fullmatch('[a-f0-9]{64}',password):raise RuntimeError('Invalid generated Worker password')
         if not a.psql("SELECT 1 FROM pg_roles WHERE rolname='"+name+"';").strip():
             a.psql(f"CREATE ROLE {name} LOGIN PASSWORD '{password}' NOSUPERUSER NOCREATEDB NOCREATEROLE;")
+        elif role in reactivated:
+            a.psql(f"ALTER ROLE {name} LOGIN PASSWORD '{password}' NOSUPERUSER NOCREATEDB NOCREATEROLE;")
     a.psql('GRANT CONNECT ON DATABASE prodcast2 TO '+','.join(names)+';')
     grants=(Path(p['stage'])/'worker-grants.sql').read_text()
     a.psql(re.sub(r'prodcast_worker_01,\s*prodcast_worker_02',','.join(names),grants),'prodcast2')
@@ -70,11 +88,13 @@ def dispatch(a):
         raise RuntimeError('PostgreSQL access configuration validation failed')
     if a.psql('SELECT pg_reload_conf();').strip()!='t':raise RuntimeError('PostgreSQL reload failed')
     # Reuse the existing least-privilege Worker ACL, changing only name/password/queue.
-    text=acl.read_text();template=next((line for line in text.splitlines() if line.startswith('user prodcast_worker_01_scheduler ')),None)
+    text=acl.read_text()
+    templates=[(line,re.match(r'^user prodcast_worker_([0-9]{2})_scheduler ',line)) for line in text.splitlines()]
+    template,match=next(((line,match) for line,match in templates if match and 'worker'+str(int(match[1])) in previous),(None,None))
     if not template or template.count('#')!=1:raise RuntimeError('Unexpected managed Redis Worker ACL')
     for role,name in zip(new,names):
         number=f'{int(role[6:]):02}';prefix='user '+name+'_scheduler '
-        line=template.replace('prodcast_worker_01_scheduler',name+'_scheduler').replace('~worker01.*','~worker'+number+'.*')
+        line=template.replace('prodcast_worker_'+match[1]+'_scheduler',name+'_scheduler').replace('~worker'+match[1]+'.*','~worker'+number+'.*')
         line=re.sub(r'#[a-f0-9]{64}', '#'+hashlib.sha256(a.S['REDIS_W'+number].encode()).hexdigest(),line)
         existing=[x for x in text.splitlines() if x.startswith(prefix)]
         if existing and existing!=[line]:raise RuntimeError('Worker Redis account differs from expansion plan')

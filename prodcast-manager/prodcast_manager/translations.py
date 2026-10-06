@@ -1,5 +1,14 @@
 """English UI catalogue. Russian strings are stable message keys."""
-EN = {'Восстановить': 'Repair',
+EN = {'Выбранный Worker': 'Selected worker',
+ '{v0}: не удалось удалить временный каталог {v1}.': '{v0}: could not remove temporary staging directory {v1}.',
+ '{v0}: диагностика очистки сохранена: {v1}': '{v0}: cleanup diagnostics saved: {v1}',
+ 'Переустановить Worker…': 'Repair / reinstall worker…',
+ 'Удалить Worker…': 'Remove worker…',
+ 'Выбранный Worker отсутствует в установленном профиле.': 'The selected worker is not in the installed profile.',
+ 'Будет переустановлен только выбранный Worker из точного установленного релиза. Его ID и настройки сохраняются.': 'Only the selected worker will be reinstalled from its exact installed release. Its ID and configuration are preserved.',
+ 'Будет удалена служба выбранного Worker и отозван его доступ. Остальные Workers сохранят свои ID. Файлы и журналы Worker сохраняются.': 'The selected worker service will be removed and its access revoked. Other workers keep their IDs. Worker files and logs are retained.',
+ '\nНазначение новых задач App временно приостанавливается. Операция продолжится после завершения задач.': '\nApp scheduling is paused temporarily. The operation proceeds after jobs finish.',
+ 'Восстановить': 'Repair',
  'Файл модели AI для офлайн-установки:': 'AI model file for offline installation:',
  'Выбрать модель…': 'Select model…',
  'Компоненты Ollama для AI (ZIP):': 'Ollama components for AI (ZIP):',
@@ -473,7 +482,7 @@ EN = {'Восстановить': 'Repair',
  'Логи': 'Logs',
  'Выберите полный релиз ZIP или каталог': 'Select a complete release ZIP or folder',
  'Проверка': 'Validation',
- 'Не удалось создать logs рядом с EXE. Переместите приложение в папку с правом записи.\n': 'Could not create logs beside the EXE. Move the '
+ 'Не удалось создать prodcast-data/logs рядом с EXE. Переместите приложение в папку с правом записи.\n': 'Could not create prodcast-data/logs beside the EXE. Move the '
                                                                                            'application to a writable folder.\n',
  'Начальные данные установки. Если пароль меняли в App, используйте новый.': 'Initial installation credentials. If the password was '
                                                                              'changed in App, use the new one.',
@@ -895,11 +904,11 @@ EN = {'Восстановить': 'Repair',
  'журнал на Linux VM: /var/lib/prodcast-manager/operation.log': 'Linux VM log: /var/lib/prodcast-manager/operation.log',
  '{v0}: передано {v1} / {v2} МБ': '{v0}: uploaded {v1} / {v2} MB',
  '{v0}: диагностика сервера сохранена на этом ПК: {v1}': '{v0}: server diagnostics saved on this PC: {v1}',
- '{v0}: не удалось сохранить диагностику сервера; основной журнал запуска находится в папке logs рядом с приложением': '{v0}: could not '
+ '{v0}: не удалось сохранить диагностику сервера; основной журнал запуска находится в папке prodcast-data/logs рядом с приложением': '{v0}: could not '
                                                                                                                        'save server '
                                                                                                                        'diagnostics; the '
                                                                                                                        'main session log '
-                                                                                                                       'is in logs beside '
+                                                                                                                       'is in prodcast-data/logs beside '
                                                                                                                        'the application',
  'Количество Workers': 'Number of Workers',
  'Язык / Language': 'Language / Язык',
