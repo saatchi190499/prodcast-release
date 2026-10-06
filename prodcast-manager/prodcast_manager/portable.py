@@ -16,6 +16,52 @@ class LegacyPasswordRequired(ValueError):
     pass
 
 
+def _copy_missing(source, destination):
+    """Copy legacy entries without replacing anything already in the new folder."""
+    destination.mkdir(parents=True, exist_ok=True)
+    for item in source.iterdir():
+        target = destination / item.name
+        if item.is_symlink():
+            continue
+        if target.exists():
+            # A profile directory is a consistency boundary: never merge two
+            # same-named profiles, since that could mix site.json and vault state.
+            if (item.is_dir() and target.is_dir() and item.parent.name.casefold() != 'sites'
+                    and not target.is_symlink()):
+                _copy_missing(item, target)
+            continue
+        if item.is_dir():
+            shutil.copytree(item, target, symlinks=True)
+        else:
+            shutil.copy2(item, target)
+
+
+def data_directory(home):
+    """Return the Manager data root, migrating the previous `data` and `logs` paths."""
+    home = Path(home)
+    current = home / 'prodcast-data'
+    legacy = home / 'data'
+    if legacy.is_dir() and not current.exists():
+        try:
+            legacy.replace(current)
+        except OSError:
+            _copy_missing(legacy, current)
+    elif legacy.is_dir():
+        _copy_missing(legacy, current)
+
+    old_logs = home / 'logs'
+    new_logs = current / 'logs'
+    if old_logs.is_dir() and not new_logs.exists():
+        try:
+            current.mkdir(parents=True, exist_ok=True)
+            old_logs.replace(new_logs)
+        except OSError:
+            _copy_missing(old_logs, new_logs)
+    elif old_logs.is_dir():
+        _copy_missing(old_logs, new_logs)
+    return current
+
+
 def profile_directory(home, config):
     validate(config)
     endpoints = {r: h['address'] for r, h in config['hosts'].items() if r!='ai'}
@@ -23,7 +69,7 @@ def profile_directory(home, config):
         endpoints={r:a for r,a in endpoints.items() if not r.startswith('worker')}
         endpoints.update(config['_worker_topology_hosts'])
     key = hashlib.sha256(json.dumps(endpoints, sort_keys=True).encode()).hexdigest()[:12]
-    return Path(home) / 'prodcast-data' / 'sites' / (config['site_id'] + '-' + key)
+    return data_directory(home) / 'sites' / (config['site_id'] + '-' + key)
 
 
 def runtime_config(path):
@@ -67,7 +113,8 @@ def import_site(path, home):
     path = Path(path).resolve()
     config = runtime_config(path)
     home = Path(home).resolve()
-    if path.is_relative_to(home / 'prodcast-data' / 'sites'):
+    root = data_directory(home)
+    if path.is_relative_to(root / 'sites'):
         return path.parent, config
     destination = profile_directory(home, config)
     if destination.exists():
@@ -77,7 +124,7 @@ def import_site(path, home):
     staging.mkdir()
     # Copy state as a snapshot. Never transfer locks or caches, or change the source.
     names = ('vault.json', 'secrets.json', 'secrets.key', 'journal.json',
-             'app-tls-journal.json', 'ai-journal.json', 'workers-journal.json', 'maintenance-journal.json', 'prodcast-ca.crt', 'history')
+             'app-tls-journal.json', 'ai-journal.json', 'workers-journal.json', 'worker-action-journal.json', 'maintenance-journal.json', 'prodcast-ca.crt', 'history')
     for name in names:
         source = path.parent / name
         if source.is_symlink():
@@ -120,16 +167,20 @@ def open_credentials(directory, legacy_password=''):
 
 
 def remember(home, directory):
-    home = Path(home).resolve()
-    atomic_json(home / 'prodcast-data' / 'manager.json', {'site': str(Path(directory).resolve().relative_to(home))})
+    root = data_directory(Path(home).resolve())
+    atomic_json(root / 'manager.json', {'site': str(Path(directory).resolve().relative_to(root))})
 
 
 def last_directory(home):
-    home = Path(home).resolve()
-    path = home / 'prodcast-data' / 'manager.json'
+    root = data_directory(Path(home).resolve())
+    path = root / 'manager.json'
     if path.exists():
-        directory = (home / json.loads(path.read_text('utf-8'))['site']).resolve()
-        if not directory.is_relative_to(home / 'prodcast-data' / 'sites'):
+        stored = Path(json.loads(path.read_text('utf-8'))['site'])
+        parts = stored.parts
+        if parts and parts[0].casefold() in ('data', 'prodcast-data'):
+            stored = Path(*parts[1:])
+        directory = (root / stored).resolve()
+        if not directory.is_relative_to(root / 'sites'):
             raise ValueError(tr('Путь площадки выходит за пределы portable-папки'))
         return directory
-    return home / 'prodcast-data' / 'sites' / 'new'
+    return root / 'sites' / 'new'

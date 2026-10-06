@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import pytest
 from prodcast_manager.session_logs import SessionLog,application_directory
+from prodcast_manager.portable import last_directory, data_directory
 from prodcast_manager.ssh import Remote
 
 def test_logs_follow_executable_not_extraction_dir(tmp_path,monkeypatch):
@@ -12,6 +13,34 @@ def test_logs_follow_executable_not_extraction_dir(tmp_path,monkeypatch):
     log=SessionLog();log.append('Ошибка AI')
     assert log.directory==tmp_path/'prodcast-data'/'logs'
     assert 'Ошибка AI' in log.path.read_text('utf-8')
+
+def test_old_data_and_logs_migrate_under_prodcast_data(tmp_path,monkeypatch):
+    legacy=tmp_path/'data';site=legacy/'sites'/'existing';site.mkdir(parents=True)
+    (site/'site.json').write_text('{}',encoding='utf-8')
+    (legacy/'manager.json').write_text('{"site":"data/sites/existing"}',encoding='utf-8')
+    old_logs=tmp_path/'logs';old_logs.mkdir();(old_logs/'old.log').write_text('preserve',encoding='utf-8')
+    monkeypatch.setattr(sys,'frozen',True,raising=False)
+    monkeypatch.setattr(sys,'executable',str(tmp_path/'Manager.exe'))
+
+    log=SessionLog()
+
+    assert last_directory(tmp_path)==tmp_path/'prodcast-data'/'sites'/'existing'
+    assert (log.directory/'old.log').read_text('utf-8')=='preserve'
+    assert log.directory==tmp_path/'prodcast-data'/'logs'
+
+def test_migration_keeps_existing_files_and_copies_missing_legacy_entries(tmp_path):
+    current=tmp_path/'prodcast-data'/'sites'/'site';current.mkdir(parents=True)
+    (current/'site.json').write_text('new',encoding='utf-8')
+    legacy=tmp_path/'data'/'sites';(legacy/'site').mkdir(parents=True)
+    (legacy/'site'/'site.json').write_text('old',encoding='utf-8')
+    (legacy/'site'/'vault.json').write_text('legacy-vault',encoding='utf-8')
+    (legacy/'other').mkdir();(legacy/'other'/'keep.txt').write_text('keep',encoding='utf-8')
+
+    data_directory(tmp_path)
+    assert (current/'site.json').read_text('utf-8')=='new'
+    assert not (current/'vault.json').exists()
+    assert (tmp_path/'prodcast-data'/'sites'/'other'/'keep.txt').read_text('utf-8')=='keep'
+    assert (legacy/'site'/'site.json').read_text('utf-8')=='old'
 
 def test_secrets_redacted_in_both_local_logs(tmp_path):
     log=SessionLog(tmp_path)

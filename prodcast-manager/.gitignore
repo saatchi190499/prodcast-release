@@ -11,6 +11,10 @@ operation.lock
 report-*.json
 logs/
 data/
+prodcast-data/
+worker-action-journal.json
+workers-journal.json
+maintenance-journal.json
 secrets.json
 secrets.key
 credentials.lock

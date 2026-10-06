@@ -5,7 +5,8 @@ import pytest
 from cryptography.fernet import InvalidToken
 from prodcast_manager.config import example, atomic_json
 from prodcast_manager.portable import (open_credentials, import_site, save_config,
-    runtime_config, profile_directory, LegacyPasswordRequired, remember, last_directory)
+    runtime_config, profile_directory, LegacyPasswordRequired, remember, last_directory,
+    data_directory)
 from prodcast_manager.vault import Vault
 
 
@@ -44,6 +45,7 @@ def test_relative_ssh_keys_and_last_site_survive_move(tmp_path):
     moved=tmp_path/'new-location';shutil.copytree(home,moved);key.unlink()
     loaded=runtime_config(last_directory(moved)/'site.json')
     assert all(Path(h['key_path']).read_text()=='synthetic-key' for h in loaded['hosts'].values())
+    assert Path(json.loads((data_directory(home)/'manager.json').read_text())['site']).parts[0]=='sites'
 
 
 from pathlib import Path
