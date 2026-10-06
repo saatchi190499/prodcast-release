@@ -9,6 +9,7 @@ import time
 import threading
 import ipaddress
 import uuid
+import re
 from pathlib import Path
 import paramiko
 
@@ -235,7 +236,7 @@ class Remote:
                     path=diagnostics.remote(self.role,action,str(original)+'\n'+self.collect_diagnostics())
                     self.log(tr('{v0}: диагностика сервера сохранена на этом ПК: {v1}').format(v0=self.role,v1=path))
                 except Exception:
-                    self.log(tr('{v0}: не удалось сохранить диагностику сервера; основной журнал запуска находится в папке logs рядом с приложением').format(v0=self.role))
+                    self.log(tr('{v0}: не удалось сохранить диагностику сервера; основной журнал запуска находится в папке prodcast-data/logs рядом с приложением').format(v0=self.role))
             raise
 
     def collect_diagnostics(self):
@@ -260,7 +261,8 @@ class Remote:
             cmd=ps(f"& '{self.stage}/worker.ps1' -Request '{self.stage}/request.json'; if(!$?){{exit 1}}")
             out=self.command(cmd)
         else:
-            out=self.root('python3 '+shlex.quote(self.stage+'/linux.py')+' '+shlex.quote(self.stage+'/request.json'))
+            # Imported stage modules otherwise leave root-owned __pycache__.
+            out=self.root('python3 -B '+shlex.quote(self.stage+'/linux.py')+' '+shlex.quote(self.stage+'/request.json'))
         lines=[l[len('MANAGER_RESULT:'):] for l in out.splitlines() if l.startswith('MANAGER_RESULT:')]
         if len(lines)!=1: raise RuntimeError(tr('{v0}: {v1} — отсутствует однозначный служебный ответ сервера; проверьте защищённый журнал на VM').format(v0=self.role,v1=action))
         try:
@@ -274,6 +276,24 @@ class Remote:
         if not self.stage: return
         # Remove only our generated staging directory; never installation/data directories.
         if self.windows:
-            code=rf"$p=[IO.Path]::GetFullPath('{self.stage}'); if(!$p.StartsWith('C:\ProgramData\ProdCastManager\inbox\',[StringComparison]::OrdinalIgnoreCase)){{throw 'Unsafe path'}}; Remove-Item -LiteralPath $p -Recurse -Force"
+            if not re.fullmatch(r'C:/ProgramData/ProdCastManager/inbox/[0-9a-f]{32}',self.stage):raise ValueError('Unsafe staging path')
+            code=rf"$ErrorActionPreference='Stop'; $p=[IO.Path]::GetFullPath('{self.stage}'); if(!$p.StartsWith('C:\ProgramData\ProdCastManager\inbox\',[StringComparison]::OrdinalIgnoreCase)){{throw 'Unsafe path'}}; if(Test-Path -LiteralPath $p){{if((Get-Item -LiteralPath $p).Attributes -band [IO.FileAttributes]::ReparsePoint){{throw 'Unsafe staging link'}}; Remove-Item -LiteralPath $p -Recurse -Force}}"
             self.command(ps(code))
-        else: self.command('rm -rf -- '+shlex.quote(self.stage))
+        else:
+            if not re.fullmatch(r'/var/tmp/prodcast-manager-[0-9a-f]{32}',self.stage):raise ValueError('Unsafe staging path')
+            code=('from pathlib import Path; import shutil; p=Path('+repr(self.stage)+'); '
+                  'assert not p.is_symlink() and p.resolve()==p, "Unsafe staging link"; '
+                  'shutil.rmtree(p) if p.exists() else None')
+            # Agents run under sudo and can create root-owned temporary files.
+            self.root('python3 -B -c '+shlex.quote(code),timeout=60)
+        self.stage=None
+
+    def cleanup_warning(self,error):
+        """Give failures a role/path and redact protected diagnostics locally."""
+        diagnostics=getattr(self,'diagnostics',None)
+        saved=None
+        if diagnostics:
+            try:saved=diagnostics.remote(self.role,'cleanup',str(error)+'\n'+self.collect_diagnostics())
+            except Exception:pass
+        self.log(tr('{v0}: не удалось удалить временный каталог {v1}.').format(v0=self.role,v1=self.stage))
+        if saved:self.log(tr('{v0}: диагностика очистки сохранена: {v1}').format(v0=self.role,v1=saved))
