@@ -2,7 +2,7 @@
 
 ## Start and release contents
 
-Extract the entire ZIP into a writable directory. Run `ProdCast-Manager.exe` and keep `_internal` beside it. The operator computer does not need a separate Python installation. Use `prodcast-manager-cli.exe` for command-line operations.
+Extract the ZIP into a writable directory and run `ProdCast-Manager.exe`. It is a standalone onefile executable; no `_internal` folder or Python installation is required. Manager stores profiles, settings, and logs in the adjacent `prodcast-data` folder. Use `prodcast-manager-cli.exe` for command-line operations.
 
 The package includes `source.zip`, RU/EN documentation, `site.example.json`, `SHA256SUMS`, and validation reports `VALIDATION.json` and `TEST-RESULTS.xml`. Replace the example's documentation-only addresses before connecting.
 
