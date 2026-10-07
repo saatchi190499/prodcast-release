@@ -7,6 +7,7 @@ import uuid
 from pathlib import Path
 from .config import ROLES, CORE_ROLES, core_roles, worker_roles, validate, topology_hash, atomic_json, file_lock, validate_membership
 from .ssh import Remote
+from .release import sha
 from .certificates import upgrade_legacy_certificates
 from .app_certificate import validate_for_site
 from .directory import app_directory
@@ -62,7 +63,7 @@ class Engine:
                     previous_operation=getattr(self,'previous_operation',''),
                     version=self.release.version if self.release else '',
                     manifest=self.release.digest if self.release else '',
-                    files={k:{'name':v.name,'sha256':self.release.offline_spec['external_model']['sha256'] if k=='offline-model_blob' else self.release.assets[v.name]['sha256']} for k,v in files.items()},
+                    files={k:{'name':v.name,'sha256':sha(v) if k=='offline-model_bundle' else self.release.offline_spec['external_model']['sha256'] if k=='offline-model_blob' else self.release.assets[v.name]['sha256']} for k,v in files.items()},
                     images=self.release.images if self.release else {},
                     offline=getattr(self.release,'offline_spec',{}),
                     secrets={k:secrets[k] for k in allowed if k in secrets},
@@ -365,7 +366,7 @@ class Engine:
         if not self.c.get('install_ai',True):
             self.log(tr('AI отключён: подключение, установка и проверки пропущены. Существующие службы AI не удаляются.'))
             return {'status':'disabled'}
-        path=self.dir/'ai-journal.json';journal={};remote=None;app_remote=None
+        path=self.dir/'ai-journal.json';journal={};remote=None;app_remote=None;db_remote=None
         mutating=mode in ('install','update','repair')
         try:
             journal=json.loads(path.read_text('utf-8')) if path.exists() else {}
@@ -410,6 +411,15 @@ class Engine:
             for file in files.values():remote.put(file)
             actions=['claim','bootstrap','repair'] if mode=='repair' else ['claim','bootstrap']+(['backup'] if status.get('version') else [])+['install']
             for action in actions:
+                if action in ('install','repair'):
+                    # Optional AI owns its additive schema migration, including
+                    # Retry AI. Do not restart App/Workers or alter DB ownership.
+                    db_remote=self.factory('db',self.c['hosts']['db'],self.vault.data.get('ssh',{}).get('db',{}),self.log)
+                    db_remote.diagnostics=self.diagnostics;db_remote.probe();db_remote.prepare_stage()
+                    db_remote.put_bytes('linux.py',(RESOURCES/'linux.py').read_bytes())
+                    journal['inflight']='documents-schema';atomic_json(path,journal);self.log('db: ai-documents')
+                    result=db_remote.action(self.payload('db',operation,'check'),'ai-documents',RESOURCES)
+                    journal['steps'].append({'action':'documents-schema','result':result});journal.pop('inflight',None);atomic_json(path,journal)
                 journal['inflight']=action;atomic_json(path,journal);self.log('ai: '+action)
                 result=remote.action(payload,action,RESOURCES)
                 journal['steps'].append({'action':action,'result':result});journal.pop('inflight',None);atomic_json(path,journal)
@@ -433,7 +443,7 @@ class Engine:
             self.log(tr('Основной стек остаётся успешно развёрнутым. AI можно повторить отдельно с тем же релизом.'))
             return {'status':'warning','error':str(error)}
         finally:
-            for r in (app_remote,remote):
+            for r in (app_remote,db_remote,remote):
                 if r:
                     try:r.cleanup()
                     except Exception:self.log(tr('AI: временный каталог не удалось очистить; основной стек не затронут.'))

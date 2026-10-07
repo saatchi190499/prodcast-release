@@ -31,6 +31,8 @@ OLLAMA_SHA='cf95886728959aa09910bb34de5cca1cc5a8f68003b5597197d3f2c2d57c0804'
 APIS=[x+'-service' for x in ('admin','identity','catalog','data','workflow','scenario','analytics','integration')]
 ROOT=Path('/opt/prodcast-manager'); STATE=Path('/var/lib/prodcast-manager')
 OLLAMA_HOME=Path('/var/lib/prodcast-ollama')
+EMBEDDING_MODEL='qwen3-embedding:0.6b'
+EMBEDDING_DIGEST='ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d'
 P={}; C={}; S={}; ST={}; LOG=None
 
 def worker_roles():
@@ -368,11 +370,21 @@ def install_offline_model(uid,gid):
     spec=P['offline'];archive=offline_asset(spec['model_archive'])
     # Public model files only. Never replace the Ollama account or its private key.
     extract_offline(archive,OLLAMA_HOME/'models')
+    bundle=P.get('files',{}).get('offline-model_bundle')
+    if bundle:
+        source=offline_asset(bundle['name'])
+        with tarfile.open(source) as tar:
+            for member in tar.getmembers():
+                if not member.isfile() or not (re.fullmatch(r'blobs/sha256-[0-9a-f]{64}',member.name) or member.name in (
+                    'manifests/registry.ollama.ai/library/qwen3/4b-instruct',
+                    'manifests/registry.ollama.ai/library/qwen3-embedding/0.6b')):
+                    raise RuntimeError('Unexpected file in AI model bundle')
+        extract_offline(source,OLLAMA_HOME/'models')
     manifest=OLLAMA_HOME/'models/manifests/registry.ollama.ai/library/qwen3/4b-instruct'
     if 'sha256:'+digest(manifest)!=spec['model_digest']:raise RuntimeError('Bundled model manifest mismatch')
     model=json.loads(manifest.read_text())
     external=spec.get('external_model')
-    if external:
+    if external and not bundle:
         source=offline_asset(P['files']['offline-model_blob']['name'])
         if source.stat().st_size!=external['bytes'] or digest(source)!=external['sha256']:raise RuntimeError('External AI model checksum mismatch')
         blobs=OLLAMA_HOME/'models/blobs';blobs.mkdir(exist_ok=True)
@@ -382,9 +394,21 @@ def install_offline_model(uid,gid):
         if not re.fullmatch('sha256:[0-9a-f]{64}',item['digest']):raise RuntimeError('Unsafe model blob name')
         path=OLLAMA_HOME/'models/blobs'/item['digest'].replace(':','-')
         if path.stat().st_size!=item['size'] or 'sha256:'+digest(path)!=item['digest']:raise RuntimeError('Bundled model blob checksum mismatch')
+    if bundle:verify_embedding_cache()
     for path in (OLLAMA_HOME/'models').rglob('*'):
         if path.is_symlink():raise RuntimeError('Unexpected symlink in offline model cache')
         os.chown(path,uid,gid);path.chmod(0o750 if path.is_dir() else 0o640)
+
+
+def verify_embedding_cache():
+    manifest=OLLAMA_HOME/'models/manifests/registry.ollama.ai/library/qwen3-embedding/0.6b'
+    if not manifest.is_file() or manifest.is_symlink() or digest(manifest)!=EMBEDDING_DIGEST:
+        raise RuntimeError('Missing/corrupt qwen3-embedding:0.6b. Select an AI models ZIP containing both required models; no offline download will be attempted')
+    model=json.loads(manifest.read_text())
+    for item in [model['config'],*model['layers']]:
+        if not re.fullmatch(r'sha256:[0-9a-f]{64}',item['digest']):raise RuntimeError('Unsafe embedding blob name')
+        blob=OLLAMA_HOME/'models/blobs'/item['digest'].replace(':','-')
+        if blob.is_symlink() or not blob.is_file() or blob.stat().st_size!=item['size'] or digest(blob)!=item['digest'][7:]:raise RuntimeError('Embedding model blob checksum mismatch')
 
 
 def same_model_digest(actual,expected):
@@ -511,6 +535,22 @@ def firewall(role):
 def psql(sql,db='postgres'):
     return dc('db','exec','-T','--user','postgres','postgres','psql','-X','-v','ON_ERROR_STOP=1','-At','-d',db,input=sql)
 
+
+def configure_ai_documents():
+    if P['role']!='db' or not ST.get('version') or ST.get('operation') not in ('',None,P['operation']):
+        raise RuntimeError('AI Documents migration requires an installed, idle DB from the original profile')
+    sql=(Path(P['stage'])/'ai-documents.sql').read_text()
+    ownership="""DO $$ DECLARE t text; o text; BEGIN
+      FOREACH t IN ARRAY ARRAY['documents','document_chunks'] LOOP
+        SELECT pg_get_userbyid(relowner) INTO o FROM pg_class WHERE oid=to_regclass('public.' || t);
+        IF o IS NOT NULL AND o NOT IN ('postgres','prodcast_ai') THEN RAISE EXCEPTION 'Unexpected AI document table owner'; END IF;
+        IF o='postgres' THEN EXECUTE format('ALTER TABLE public.%I OWNER TO prodcast_ai',t); END IF;
+      END LOOP; END $$;
+    """
+    psql('BEGIN; CREATE EXTENSION IF NOT EXISTS vector; GRANT USAGE,CREATE ON SCHEMA public TO prodcast_ai; '+ownership+
+         'SET LOCAL ROLE prodcast_ai; SET LOCAL search_path=public; '+sql+' COMMIT;','prodcast_ai')
+    return {'documents_schema':True,'embedding_dimension':1024}
+
 def install_db():
     require_database_data()
     images={'postgres':PG,'redis':REDIS}
@@ -613,7 +653,7 @@ def load_packages():
 
 def ai_environment(model):
     # Pydantic decodes collection-valued env fields as JSON before validators run.
-    return {'APP_ENV':'production','LOG_LEVEL':'INFO','LLM_PROVIDER':'ollama','LLM_MODEL':model,'OLLAMA_BASE_URL':'http://127.0.0.1:11434/v1','LLM_TIMEOUT_SECONDS':'90','AGENT_TIMEOUT_SECONDS':'120','RAG_ENABLED':'false','MCP_ALLOWED_SERVERS':json.dumps([]),'MCP_CODE_ENABLED':'false','MCP_ENGINEERING_ENABLED':'false','MCP_TEMPLATES_ENABLED':'false','BROWSER_AUTH_USERNAME':'prodcast-app','BROWSER_AUTH_PASSWORD_HASH':S['AI_HASH'],'NOTEBOOK_API_KEY':S['AI_KEY'],'DATABASE_URL':f"postgresql://prodcast_ai:{S['PW_AI']}@{C['hosts']['db']['address']}:5432/prodcast_ai?sslmode=verify-full&sslrootcert=/etc/prodcast/certs/ca.crt"}
+    return {'APP_ENV':'production','LOG_LEVEL':'INFO','LLM_PROVIDER':'ollama','LLM_MODEL':model,'OLLAMA_BASE_URL':'http://127.0.0.1:11434/v1','LLM_TIMEOUT_SECONDS':'90','AGENT_TIMEOUT_SECONDS':'120','RAG_ENABLED':'true','EMBEDDING_PROVIDER':'ollama','EMBEDDING_MODEL':EMBEDDING_MODEL,'EMBEDDING_DIMENSION':'1024','DOCUMENT_STORAGE_ROOT':'/app/data/documents','MCP_ALLOWED_SERVERS':json.dumps([]),'MCP_CODE_ENABLED':'false','MCP_ENGINEERING_ENABLED':'false','MCP_TEMPLATES_ENABLED':'false','BROWSER_AUTH_USERNAME':'prodcast-app','BROWSER_AUTH_PASSWORD_HASH':S['AI_HASH'],'NOTEBOOK_API_KEY':S['AI_KEY'],'DATABASE_URL':f"postgresql://prodcast_ai:{S['PW_AI']}@{C['hosts']['db']['address']}:5432/prodcast_ai?sslmode=verify-full&sslrootcert=/etc/prodcast/certs/ca.crt"}
 
 def model_compute(active):
     gpu=any(m.get('size_vram',0)>0 for m in active)
@@ -659,6 +699,15 @@ def install_ai():
         if P.get('offline'):raise RuntimeError('Bundled offline AI model was not recognized; no network download will be attempted')
         print('MANAGER_PROGRESS:ai-model-download',flush=True)
         run([ollama/'bin/ollama','pull',model])
+    tags=request('http://127.0.0.1:11434/api/tags')
+    if not any(m['name']==EMBEDDING_MODEL for m in tags['models']):
+        if P.get('offline'):raise RuntimeError('Missing qwen3-embedding:0.6b. Select a ZIP containing both AI models and retry AI; no offline download will be attempted')
+        run([ollama/'bin/ollama','pull',EMBEDDING_MODEL])
+    verify_embedding_cache()
+    embedding=request('http://127.0.0.1:11434/api/embed',{'model':EMBEDDING_MODEL,'input':'ProdCast document library check','keep_alive':0},timeout=600)
+    vectors=embedding.get('embeddings',[])
+    import math
+    if len(vectors)!=1 or len(vectors[0])!=1024 or any(not isinstance(v,(float,int)) or not math.isfinite(v) for v in vectors[0]):raise RuntimeError('Embedding model must return a finite 1024-dimensional vector')
     print('MANAGER_PROGRESS:ai-generation',flush=True)
     answer=request('http://127.0.0.1:11434/api/generate',{'model':model,'prompt':'Reply with OK only.','stream':False,'keep_alive':'10m'},timeout=600)
     if not answer.get('response'): raise RuntimeError('Ollama returned empty generation')
@@ -671,12 +720,18 @@ def install_ai():
     certs(base/'certs',['ca.crt','ai.crt','ai.key'],{'ai.key':(1000,1000)})
     env=ai_environment(model)
     write(base/'runtime.env',''.join(k+'='+v+'\n' for k,v in env.items()))
+    documents=ROOT/'ai-data/documents'
+    if any(p.is_symlink() for p in (ROOT,documents.parent,documents)):raise RuntimeError('Unsafe AI document storage path')
+    documents.mkdir(parents=True,exist_ok=True);os.chown(documents,1000,1000);documents.chmod(0o750)
     service={'image':P['images']['prodcast-ai']['transport_tag'],'pull_policy':'never','platform':'linux/amd64','user':'1000:1000','network_mode':'host','env_file':[{'path':'./runtime.env','format':'raw'}],'command':['uvicorn','app.main:app','--host',C['hosts']['ai']['address'],'--port','8443','--ssl-certfile','/etc/prodcast/certs/ai.crt','--ssl-keyfile','/etc/prodcast/certs/ai.key'],'volumes':['./certs:/etc/prodcast/certs:ro'],'restart':'unless-stopped','security_opt':['no-new-privileges:true'],'mem_limit':'2g','cpus':2,'logging':{'driver':'json-file','options':{'max-size':'10m','max-file':'5'}}}
+    service['volumes'].append(str(documents)+':/app/data/documents')
     selinux_json_mounts({'api':service})
     write(base/'compose.json',json.dumps({'services':{'api':service}})); firewall('ai'); dc('ai','up','-d','--force-recreate','--pull','never')
     response=wait_http('https://'+C['hosts']['ai']['address']+':8443/readyz',service='ProdCast AI API on AI VM (8443)',headers={'X-API-Key':S['AI_KEY']},ca=str(base/'certs/ca.crt'))
     if response.get('status')!='ready': raise RuntimeError('AI not ready')
-    return {'model':model,'digest':model_digest,'gpu':gpu,'compute':'gpu' if gpu else 'cpu'}
+    dc('ai','exec','-T','api','python','-c',"import tempfile; from pathlib import Path; p=Path('/app/data/documents'); t=tempfile.TemporaryDirectory(prefix='.manager-check-',dir=p); t.cleanup()")
+    request('https://'+C['hosts']['ai']['address']+':8443/v1/documents',headers={'X-API-Key':S['AI_KEY']},ca=str(base/'certs/ca.crt'))
+    return {'model':model,'embedding_model':EMBEDDING_MODEL,'documents':True,'digest':model_digest,'gpu':gpu,'compute':'gpu' if gpu else 'cpu'}
 
 def configure_activation(b,env,override):
     from uuid import UUID
@@ -828,10 +883,11 @@ def verify_ai():
     code="""import os,requests
 assert os.environ.get('PRODCAST_AI_ENABLED','').lower()=='true', 'Enable AI in App through Install/Update first'
 r=requests.get(os.environ['PRODCAST_AI_BASE_URL']+'/readyz',headers={'X-API-Key':os.environ['PRODCAST_AI_API_KEY']},verify=os.environ['PRODCAST_AI_CA_BUNDLE'],timeout=120);r.raise_for_status();assert r.json()['status']=='ready'
+r=requests.get(os.environ['PRODCAST_AI_BASE_URL']+'/v1/documents',headers={'X-API-Key':os.environ['PRODCAST_AI_API_KEY']},verify=os.environ['PRODCAST_AI_CA_BUNDLE'],timeout=120);r.raise_for_status()
 r=requests.post(os.environ['PRODCAST_AI_BASE_URL']+'/api/chat',auth=(os.environ['PRODCAST_AI_BASIC_AUTH_USERNAME'],os.environ['PRODCAST_AI_BASIC_AUTH_PASSWORD']),verify=os.environ['PRODCAST_AI_CA_BUNDLE'],json={'message':'Reply with OK only.'},timeout=180);r.raise_for_status();assert r.json().get('answer')
 """
     app_python(code,current=True)
-    return {'ai_chat':True}
+    return {'ai_chat':True,'ai_documents':True}
 
 
 def customer_gateway(template,hostname):
@@ -1021,6 +1077,8 @@ def backup():
             volume=json.loads(run(['docker','volume','inspect','prodcast-managed-media']))[0]['Mountpoint']
             run(['tar','-czf',folder/'media.tar.gz','-C',volume,'.'])
             if (STATE/'license-client.json').exists(): shutil.copy2(STATE/'license-client.json',folder/'license-client.json')
+        if role=='ai' and (ROOT/'ai-data/documents').is_dir():
+            run(['tar','-czf',folder/'documents.tar.gz','-C',ROOT/'ai-data','documents'])
     shutil.copy2(STATE/'state.json',folder/'state.json')
     hashes={p.name:digest(p) for p in folder.iterdir() if p.is_file() and p.name!='checksums.json'}
     write(folder/'checksums.json',json.dumps(hashes)); return {'path':str(folder),'sha256':hashes,'model_cache_excluded':role=='ai'}
@@ -1097,6 +1155,7 @@ def dispatch():
         from maintenance_linux import dispatch as maintenance_dispatch
         return maintenance_dispatch(sys.modules[__name__])
     if action=='app-tls':return apply_app_tls()
+    if action=='ai-documents':return configure_ai_documents()
     if action=='claim': return claim()
     if action=='release-operation': return release_operation()
     if action=='bootstrap': return bootstrap()
@@ -1122,6 +1181,7 @@ def dispatch():
 
 def tls_revision():
     revision={k:v for k,v in P.get('tls',{}).items() if k.endswith('.crt')}
+    if P.get('role')=='ai':revision['documents_adapter']='ai-documents-gguf-v2'
     if P.get('role')=='app':
         revision['install_ai']=C.get('install_ai',True)
         revision['ai_address']=C['hosts']['ai']['address'] if C.get('install_ai',True) else ''
@@ -1134,7 +1194,7 @@ def tls_revision():
 
 def cached_runtime_present():
     role=P['role'];action=P['action']
-    if action in ('bootstrap','repair'):return False
+    if action in ('bootstrap','repair','ai-documents','verify-ai'):return False
     if action in ('install','configure','start','migrate') and ST.get('step_tls',{}).get(P['operation']+':'+action)!=tls_revision():return False
     if action=='install' and role in ('db','ai'):
         if role=='ai' and not (OLLAMA_HOME/'models').is_dir():return False

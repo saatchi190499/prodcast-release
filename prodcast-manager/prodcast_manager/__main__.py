@@ -27,14 +27,14 @@ def main():
     parser.add_argument('--pfx',help='Customer PFX/P12 file; its password is requested interactively')
     parser.add_argument('--app-url',help='Customer HTTPS origin matching the PFX SAN')
     parser.add_argument('--ca-chain',help='Optional PEM CA chain including root, if absent from PFX')
-    parser.add_argument('--ai-model',default='',help='Separately downloaded official Ollama model file for an offline release')
+    parser.add_argument('--ai-model',default='',help='AI models ZIP with chat and embedding models (legacy official chat GGUF also accepted)')
     parser.add_argument('--ollama-components',default='',help='Separate Ollama components ZIP from the offline release')
     a=parser.parse_args();home=application_directory();path=Path(a.site).resolve() if a.site else last_directory(home)/'site.json';directory=path.parent
     if a.action=='gui':
         from .gui import main as gui
         gui();return
     if a.action=='self-test':
-        for name in ('linux.py','worker.ps1','worker-service-runner.py','app.env.in','worker-grants.sql','directory_probe.py','maintenance_linux.py','workers_linux.py'):assert (RESOURCES/name).stat().st_size>100
+        for name in ('linux.py','worker.ps1','worker-service-runner.py','app.env.in','worker-grants.sql','directory_probe.py','maintenance_linux.py','workers_linux.py','ai-documents.sql'):assert (RESOURCES/name).stat().st_size>100
         assert len(list((RESOURCES/'ldap_deps').glob('*.whl')))==2
         compile((RESOURCES/'linux.py').read_text('utf-8'),'linux.py','exec')
         validate(example())

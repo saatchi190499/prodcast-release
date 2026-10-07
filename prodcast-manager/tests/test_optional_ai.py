@@ -29,7 +29,7 @@ def test_disabled_ai_never_connects_or_checks_assets(tmp_path):
     assert not (tmp_path/'ai-journal.json').exists()
 
 
-@pytest.mark.parametrize('failure',[('ai','preflight'),('ai','claim'),('ai','bootstrap'),('ai','backup'),('ai','install'),('app','verify-ai'),('ai','commit')])
+@pytest.mark.parametrize('failure',[('ai','preflight'),('ai','claim'),('ai','bootstrap'),('ai','backup'),('db','ai-documents'),('ai','install'),('app','verify-ai'),('ai','commit')])
 def test_ai_failures_leave_core_complete_and_retry_without_core_work(tmp_path,failure):
     e=engine(tmp_path);FakeRemote.fail=failure;e.run('update')
     assert report(tmp_path)['ai']['status']=='warning'
@@ -37,7 +37,7 @@ def test_ai_failures_leave_core_complete_and_retry_without_core_work(tmp_path,fa
     assert state['status']=='failed'
     FakeRemote.history=[];FakeRemote.fail=None
     assert e.run('ai')['status']=='complete'
-    assert all(role=='ai' or (role,action)==('app','verify-ai') for role,action,_ in FakeRemote.history)
+    assert all(role=='ai' or (role,action) in (('app','verify-ai'),('db','ai-documents')) for role,action,_ in FakeRemote.history)
     assert all(op==state['operation'] for _,_,op in FakeRemote.history)
     assert json.loads((tmp_path/'ai-journal.json').read_text('utf-8'))['status']=='complete'
     assert json.loads((tmp_path/'journal.json').read_text('utf-8'))['status']=='complete'

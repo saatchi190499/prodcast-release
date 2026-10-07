@@ -251,6 +251,8 @@ class Remote:
 
     def _action(self,payload,action,resources):
         payload=dict(payload,action=action,stage=self.stage)
+        if action=='ai-documents':
+            self.put_bytes('ai-documents.sql',(Path(resources)/'ai-documents.sql').read_bytes())
         if action=='bootstrap' and not self.windows and payload.get('offline'):
             # Small, signed compatibility RPMs are shipped with the portable
             # Manager so existing release archives and resume hashes stay valid.
