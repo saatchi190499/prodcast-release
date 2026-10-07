@@ -48,6 +48,7 @@ class Release:
         self.ollama_path=Path(ollama_path) if ollama_path else None
         self.cache=Path(cache)
         self.ollama_root=None
+        self.model_bundle=None
         path=assemble_parts(Path(path),cache)
         if path.is_file():
             dest=Path(cache)/('release-'+sha(path)[:20])
@@ -173,6 +174,14 @@ class Release:
         if path.stat().st_size!=spec['bytes'] or sha(path)!=spec['sha256']:raise ValueError('AI model checksum mismatch. Use the official model file linked in this release.')
         return path
 
+    def prepare_models(self):
+        if self.model_path and self.model_path.suffix.lower()=='.zip':
+            if self.model_bundle is not None and self.model_bundle.is_file():return {'offline-model_bundle':self.model_bundle}
+            from .ai_models import prepare_bundle
+            self.model_bundle=prepare_bundle(self.model_path,self.cache,self.offline_spec.get('external_model'),self.offline_spec['model_digest'])
+            return {'offline-model_bundle':self.model_bundle}
+        return {'offline-model_blob':self.model_file()} if self.offline_spec.get('external_model') else {}
+
     def select_platform(self,role,osinfo):
         if not self.offline or role.startswith('worker'):return
         key=osinfo['ID']+':'+osinfo['VERSION_ID']
@@ -210,5 +219,5 @@ class Release:
             result.update({'offline-linux-'+k.replace(':','-'):self.root/n for k,n in packages.items()})
             for item in (['db_images'] if role=='db' else ['ollama_runtime','model_archive'] if role=='ai' else []):
                 result['offline-'+item]=self.offline_file(spec[item])
-            if role=='ai' and spec.get('external_model'):result['offline-model_blob']=self.model_file()
+            if role=='ai':result.update(self.prepare_models())
         return result

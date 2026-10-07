@@ -7,6 +7,8 @@ EN.update(DIRECTORY_EN)
 from .maintenance_translations import EN as MAINTENANCE_EN
 EN.update(MAINTENANCE_EN)
 EN.update({
+    'ZIP моделей AI для офлайн-установки:':'AI models ZIP for offline installation:',
+    'Выбрать модели…':'Select models…',
     'Добавить Workers…':'Add Workers…',
     'Для расширения установленной площадки используйте «Добавить Workers…».':'To expand an installed site, use “Add Workers…”.',
     'Откройте профиль установленной площадки.':'Open the installed site profile.',
