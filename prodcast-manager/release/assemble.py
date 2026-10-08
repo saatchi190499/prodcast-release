@@ -185,6 +185,16 @@ def build(version: str, base_archive: Path, payloads: dict[str, Path], manager_e
 
     for component in ("app", "worker", "ai", "agent"):
         payload, build_manifest = load_payload(payloads[component], component, snapshot, target)
+        if component == "worker":
+            policy = build_manifest.get("worker_execution_policy")
+            management = manifest.setdefault("management", {})
+            management.pop("worker_execution_policy", None)
+            if policy is not None:
+                expected = {"schema": 1, "execution_mode": "windows-account", "execution_timeout_seconds": 0}
+                if policy != expected or type(policy.get("schema")) is not int or type(policy.get("execution_timeout_seconds")) is not int:
+                    raise ValueError("Unsupported Worker execution policy")
+                management["worker_execution_policy"] = copy.deepcopy(policy)
+                management["minimum_manager"] = "0.6.4"
         artifact_names = [item["name"] for item in build_manifest["artifacts"]]
         mapping: dict[str, str] = {}
         if component == "agent":

@@ -1,5 +1,4 @@
 """Local UTF-8 logs live next to the executable, never in the extraction temp dir."""
-import os
 import re
 import sys
 import threading

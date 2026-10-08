@@ -1,13 +1,23 @@
 name: Build latest Manager
 
 on:
+  pull_request:
+    paths:
+      - 'prodcast-manager/**'
+      - '.github/workflows/build-latest-manager.yml'
   workflow_dispatch:
+    inputs:
+      source_ref:
+        description: 'Git ref to build and verify'
+        required: true
+        default: main
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: build-latest-manager
+  group: build-latest-manager-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -20,10 +30,10 @@ jobs:
         shell: pwsh
         working-directory: prodcast-manager
     steps:
-      - name: Check out latest main
+      - name: Check out selected source
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ inputs.source_ref || github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 1
           persist-credentials: false
       - uses: actions/setup-python@v5

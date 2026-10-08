@@ -1,5 +1,5 @@
 """Offline delivery helpers. No network operations are permitted here."""
-import hashlib,re,zipfile
+import hashlib, zipfile
 from pathlib import Path
 
 PROFILE='prodcast-five-vm-v3-offline'

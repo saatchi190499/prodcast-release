@@ -10,7 +10,7 @@ import uuid
 from pathlib import Path
 from . import backup_archive as archive
 from .config import atomic_json,file_lock,core_roles,worker_roles,topology_hash
-from .engine import Engine,RESOURCES
+from .engine import RESOURCES
 from .portable import open_credentials,save_config
 
 

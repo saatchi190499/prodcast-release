@@ -4,8 +4,7 @@ import getpass
 import json
 import sys
 from pathlib import Path
-from .config import example, validate, atomic_json, ROLES, roles, worker_roles
-from .vault import Vault
+from .config import example, validate, atomic_json, roles, worker_roles
 from .release import Release
 from .engine import Engine, plan, RESOURCES
 from .ssh import scan

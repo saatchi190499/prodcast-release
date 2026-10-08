@@ -1,15 +1,14 @@
 from .i18n import tr
-import contextlib
 import json
-import os
 import time
 import uuid
 from pathlib import Path
-from .config import ROLES, CORE_ROLES, core_roles, worker_roles, validate, topology_hash, atomic_json, file_lock, validate_membership
+from .config import core_roles, worker_roles, validate, topology_hash, atomic_json, file_lock, validate_membership
 from .ssh import Remote
 from .release import sha
 from .certificates import upgrade_legacy_certificates
 from .app_certificate import validate_for_site
+from .worker_policy import worker_execution_policy
 from .directory import app_directory
 
 RESOURCES=Path(__file__).parent/'resources'
@@ -66,6 +65,7 @@ class Engine:
                     files={k:{'name':v.name,'sha256':sha(v) if k=='offline-model_bundle' else self.release.offline_spec['external_model']['sha256'] if k=='offline-model_blob' else self.release.assets[v.name]['sha256']} for k,v in files.items()},
                     images=self.release.images if self.release else {},
                     offline=getattr(self.release,'offline_spec',{}),
+                    worker_execution_policy=worker_execution_policy(self.release),
                     secrets={k:secrets[k] for k in allowed if k in secrets},
                     tls={k:v for k,v in tls.items() if k=='ca.crt' or k.rsplit('.',1)[0] in certs},
                     app_tls=self.vault.data.get('app_tls') if role=='app' else None,

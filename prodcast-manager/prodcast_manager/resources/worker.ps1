@@ -11,6 +11,12 @@ $service='ProdCastWorker'+$number
 $state=$null
 $lock=$null
 $transcript=$false
+$executionMode='windows-appcontainer'
+if($p.worker_execution_policy){
+    $policy=$p.worker_execution_policy
+    if($policy.schema -ne 1 -or $policy.execution_mode -ne 'windows-account' -or $policy.execution_timeout_seconds -ne 0){throw 'Unsupported Worker execution policy'}
+    $executionMode='windows-account'
+}
 
 function Save-State {
     $tmp=$stateFile+'.tmp'
@@ -185,6 +191,13 @@ function Install-Worker {
         Check-Native 'Compile compatible Worker entry point'
     }
     $site=[ordered]@{worker_number=$number;postgres_host=$p.site.hosts.db.address;postgres_port=5432;postgres_db='prodcast2';postgres_user=('prodcast_worker_'+$number);redis_host=$p.site.hosts.db.address;redis_port=6380;redis_user=('prodcast_worker_'+$number+'_scheduler');main_server_url=$p.site.public_url.TrimEnd('/')}
+    if($p.worker_execution_policy){
+        $site.execution_mode=$executionMode
+        $site.execution_timeout_seconds=0
+        $site.scenario_queue='scenarios'
+        $site.workflow_model_queue='workflows'
+        $site.workflow_data_queue='workflows_data'
+    }
     $site | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $installDir 'site.json') -Encoding UTF8
     foreach($name in @('prodcast-db-ca.crt','prodcast-app-ca.crt')){[IO.File]::WriteAllText((Join-Path $installDir $name),$p.tls.'ca.crt')}
     Add-Type -AssemblyName System.Security
@@ -196,7 +209,7 @@ function Install-Worker {
     if($svc.Status -eq 'Running'){Stop-Service $service; $svc.WaitForStatus('Stopped',[TimeSpan]::FromSeconds(90))}
     & (Join-Path $package 'runtime\Start-Worker.ps1') -InstallDir $installDir -WorkerNumber $number | Out-Host
     $marker=Get-Content -Raw -LiteralPath (Join-Path $installDir 'logs\scheduler-service-ready.json') | ConvertFrom-Json
-    if($marker.mode -ne 'windows-appcontainer' -or !$marker.postgres_tls){throw 'Worker isolation/TLS readiness failed'}
+    if($marker.mode -ne $executionMode -or !$marker.postgres_tls){throw 'Worker isolation/TLS readiness failed'}
     Set-Field $script:state 'previous_root' $script:state.install_root
     Set-Field $script:state 'install_root' $installDir
     Set-Field $script:state 'pending_root' ''; Save-State
@@ -356,7 +369,7 @@ function Dispatch {
         'verify' {
             if(!(Test-WorkerRuntime)){throw 'Worker service readiness failed'}
             $marker=Get-Content -Raw -LiteralPath (Join-Path $script:state.install_root 'logs\scheduler-service-ready.json') | ConvertFrom-Json
-            if($marker.mode -ne 'windows-appcontainer' -or !$marker.postgres_tls){throw 'Worker isolation/TLS readiness failed'}
+            if($marker.mode -ne $executionMode -or !$marker.postgres_tls){throw 'Worker isolation/TLS readiness failed'}
             return @{healthy=$true;service=$service;postgres_tls=$true}
         }
         'repair' {

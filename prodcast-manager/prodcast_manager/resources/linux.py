@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Uploaded agent. Standard library only. Never prints command output or secrets."""
-import base64
 import fcntl
 import hashlib
 import http.client

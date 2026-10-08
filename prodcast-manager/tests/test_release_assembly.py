@@ -133,3 +133,21 @@ def test_unexpected_component_file_is_rejected(tmp_path):
     manager.write_bytes(b"manager")
     with pytest.raises(ValueError, match="Unexpected files in ai payload"):
         build(VERSION, base(tmp_path), payloads, manager, snapshot(tmp_path), tmp_path / "out")
+
+
+@pytest.mark.parametrize("policy", [None, {"schema": 1, "execution_mode": "windows-account", "execution_timeout_seconds": 0}])
+def test_worker_policy_follows_payload(tmp_path, policy):
+    payloads = inputs(tmp_path)
+    path = payloads["worker"] / "release-manifest.json"
+    data = json.loads(path.read_text())
+    if policy is not None:
+        data["worker_execution_policy"] = policy
+        write_json(path, data)
+        checksum(payloads["worker"])
+    manager = tmp_path / "manager.exe"
+    manager.write_bytes(b"manager")
+    assets = build(VERSION, base(tmp_path), payloads, manager, snapshot(tmp_path), tmp_path / "out")
+    doc = json.loads(assets["manifest"].read_text())
+    assert doc["management"].get("worker_execution_policy") == policy
+    if policy:
+        assert doc["management"]["minimum_manager"] == "0.6.4"
