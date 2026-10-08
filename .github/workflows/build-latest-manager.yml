@@ -1,6 +1,11 @@
 name: Build latest Manager
 
 on:
+  push:
+    branches: ['codex/dev-worker-policy-20261008']
+    paths:
+      - 'prodcast-manager/**'
+      - '.github/workflows/build-latest-manager.yml'
   pull_request:
     paths:
       - 'prodcast-manager/**'
