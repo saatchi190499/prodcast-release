@@ -8,6 +8,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
 from .config import example, validate, atomic_json, roles, core_roles, worker_roles, MAX_WORKERS
+from .vault import Vault
 from .release import Release
 from .engine import Engine, plan
 from .ssh import scan
