@@ -1,0 +1,76 @@
+name: Build Prodcast Agent installer
+run-name: Prodcast Agent ${{ inputs.version }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Internal Agent version (for example 0.6.5)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prodcast-agent-${{ inputs.version }}
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: '3.14.7'
+  PRODCAST_RELEASE_APP_ID: ${{ secrets.PRODCAST_RELEASE_APP_ID }}
+
+jobs:
+  agent:
+    name: Build and smoke-test Agent installer
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - name: Validate internal version
+        shell: pwsh
+        env:
+          AGENT_VERSION: ${{ inputs.version }}
+        run: |
+          if ($env:AGENT_VERSION -notmatch '^(\d+)\.(\d+)\.(\d+)$') {
+            throw 'Enter the internal Agent version as MAJOR.MINOR.PATCH, for example 0.6.5.'
+          }
+          $parts = @($Matches[1], $Matches[2], $Matches[3])
+          foreach ($part in $parts) {
+            if ([long]$part -gt 65535) { throw 'Windows version components must not exceed 65535.' }
+          }
+          $version = ($parts | ForEach-Object { [int]$_ }) -join '.'
+          "PRODCAST_RELEASE_VERSION=v$version" >> $env:GITHUB_ENV
+          "AGENT_ARTIFACT_VERSION=$version" >> $env:GITHUB_ENV
+      - uses: actions/create-github-app-token@v2
+        if: env.PRODCAST_RELEASE_APP_ID != ''
+        id: release-token
+        with:
+          app-id: ${{ env.PRODCAST_RELEASE_APP_ID }}
+          private-key: ${{ secrets.PRODCAST_RELEASE_APP_PRIVATE_KEY }}
+          owner: saatchi190499
+          repositories: prodcast-agent
+      - uses: actions/checkout@v4
+        with:
+          repository: saatchi190499/prodcast-agent
+          ref: main
+          token: ${{ steps.release-token.outputs.token || secrets.PRODCAST_RELEASE_TOKEN }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install Inno Setup
+        run: choco install innosetup --version=6.7.1 --yes --no-progress
+      - name: Build and smoke-test Agent
+        shell: pwsh
+        env:
+          PRODCAST_SOURCE_REPOSITORY: saatchi190499/prodcast-agent
+        run: ./release/build_windows.ps1
+      - name: Upload installer and release metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: Prodcast-Agent-${{ env.AGENT_ARTIFACT_VERSION }}
+          path: dist/package/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
