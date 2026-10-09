@@ -7,6 +7,9 @@ EN.update(DIRECTORY_EN)
 from .maintenance_translations import EN as MAINTENANCE_EN
 EN.update(MAINTENANCE_EN)
 EN.update({
+    'пропущен — существующая установка сохранена':'skipped — existing installation preserved',
+    'AI: пакеты не выбраны; обновление пропущено, существующая установка сохранена.':'AI: no packages selected; update skipped and existing installation preserved.',
+    'Предыдущая операция AI уже начиналась: журнал восстановления сохранён. При необходимости повторите или остановите её отдельно.':'A previous AI operation already started; its recovery journal is preserved. Retry or stop it separately if needed.',
     'ZIP моделей AI для офлайн-установки:':'AI models ZIP for offline installation:',
     'Выбрать модели…':'Select models…',
     'Добавить Workers…':'Add Workers…',

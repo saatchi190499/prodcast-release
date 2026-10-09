@@ -166,6 +166,44 @@ class Engine:
             finally:r.close()
 
     def stop_previous_operation(self):
+        """Stop core and optional AI journals independently, preserving recovery data."""
+        core=self._stop_previous_core_operation()
+        path=self.dir/'ai-journal.json'
+        with file_lock(self.dir/'operation.lock'):
+            journal=json.loads(path.read_text('utf-8')) if path.exists() else {}
+            if journal.get('status') not in ('running','failed'):
+                return core
+            operation=journal.get('operation')
+            if not operation:
+                raise ValueError('AI journal has no operation ID; preserve the journal for recovery')
+            if journal.get('ai_address',self.c['hosts']['ai']['address'])!=self.c['hosts']['ai']['address']:
+                raise ValueError('AI: stop the pending operation using its original VM address')
+            remote=None
+            try:
+                remote=self.factory('ai',self.c['hosts']['ai'],self.vault.data.get('ssh',{}).get('ai',{}),self.log)
+                remote.diagnostics=self.diagnostics
+                remote.probe();remote.prepare_stage()
+                remote.put_bytes('linux.py',(RESOURCES/'linux.py').read_bytes())
+                payload=self.payload('ai',operation,'stop-operation')
+                state=remote.action(payload,'preflight',RESOURCES)
+                owner=state.get('operation')
+                if owner not in (None,'',operation):
+                    raise RuntimeError('AI VM is owned by a different operation; refusing to release it')
+                result=remote.action(payload,'release-operation',RESOURCES) if owner else {'released':False,'reason':'no operation owner'}
+                history=self.dir/'history';history.mkdir(exist_ok=True)
+                archived=history/('ai-journal-'+operation+'.json')
+                if not archived.exists():atomic_json(archived,journal)
+                journal.update(status='stopped',stopped_at=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),stop_reason='manual')
+                journal.pop('inflight',None);atomic_json(path,journal)
+            finally:
+                if remote:
+                    try:remote.cleanup()
+                    except Exception:self.log('AI: temporary staging cleanup failed; recovery journal retained')
+                    finally:remote.close()
+        self.log('Pending AI operation stopped. Installed AI, core stack, vault and recovery history preserved.')
+        return {'status':'stopped','operation':operation,'core':core,'released':core.get('released',[])+[{'role':'ai','result':result}]}
+
+    def _stop_previous_core_operation(self):
         """Release a stale deployment owner without deleting recovery data."""
         path=self.dir/'journal.json'
         journal=json.loads(path.read_text('utf-8')) if path.exists() else {}
@@ -334,14 +372,14 @@ class Engine:
                 (self.dir/'prodcast-ca.crt').write_text(self.vault.data['tls']['ca.crt'],encoding='ascii')
             self.log(tr('Основной стек: успешно. App, DB и Workers проверены; результат сохранён.') if mutating else tr('Операция для App, DB и Workers завершена; результат сохранён.'))
             # Core is durably complete before any AI connection, upload or check.
-            try:optional=self._optional_ai(mode,operation)
+            try:optional=self._optional_ai(mode,operation,True)
             except Exception as error:
                 optional={'status':'warning','error':str(error)}
                 self.log(tr('ПРЕДУПРЕЖДЕНИЕ AI: ')+str(error))
             core_report['ai']=optional
             try:atomic_json(self.dir/('report-'+operation+'.json'),core_report)
             except OSError:self.log(tr('Не удалось дополнить отчёт результатом AI. Успешный журнал основного стека сохранён.'))
-            label={'complete':tr('успешно'),'disabled':tr('отключён'),'warning':tr('требует внимания'),'checked':tr('проверен'),'not_installed':tr('не установлен')}.get(optional['status'],optional['status'])
+            label={'complete':tr('успешно'),'disabled':tr('отключён'),'skipped':tr('пропущен — существующая установка сохранена'),'warning':tr('требует внимания'),'checked':tr('проверен'),'not_installed':tr('не установлен')}.get(optional['status'],optional['status'])
             self.log(tr('Готово. Основной стек: успешно. AI: ')+label+'.')
             return self.report
         except Exception:
@@ -362,11 +400,28 @@ class Engine:
                     try:r.close()
                     except Exception:pass
 
-    def _optional_ai(self,mode,core_operation):
+    def _optional_ai(self,mode,core_operation,allow_skip=False):
         if not self.c.get('install_ai',True):
             self.log(tr('AI отключён: подключение, установка и проверки пропущены. Существующие службы AI не удаляются.'))
             return {'status':'disabled'}
         path=self.dir/'ai-journal.json';journal={};remote=None;app_remote=None;db_remote=None
+        spec=getattr(self.release,'offline_spec',{})
+        external=bool(spec.get('external_ollama') or spec.get('external_model'))
+        missing_selection=not getattr(self.release,'model_path',None) and not getattr(self.release,'ollama_path',None)
+        if allow_skip and mode=='update' and external and missing_selection:
+            prior=json.loads(path.read_text('utf-8')) if path.exists() else {}
+            pending=prior.get('status') in ('running','failed')
+            started=bool(prior.get('steps') or prior.get('inflight'))
+            if pending and not started:
+                history=self.dir/'history';history.mkdir(exist_ok=True)
+                archived=history/('ai-journal-skipped-'+str(prior.get('operation',core_operation))+'.json')
+                if not archived.exists():atomic_json(archived,prior)
+                prior.update(status='skipped',skip_reason='packages_not_selected',skipped_at=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()))
+                atomic_json(path,prior)
+            self.log(tr('AI: пакеты не выбраны; обновление пропущено, существующая установка сохранена.'))
+            if pending and started:
+                self.log(tr('Предыдущая операция AI уже начиналась: журнал восстановления сохранён. При необходимости повторите или остановите её отдельно.'))
+            return {'status':'skipped','reason':'packages_not_selected','pending_recovery_preserved':pending and started}
         mutating=mode in ('install','update','repair')
         try:
             journal=json.loads(path.read_text('utf-8')) if path.exists() else {}
