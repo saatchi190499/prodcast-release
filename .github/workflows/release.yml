@@ -365,7 +365,7 @@ jobs:
         run: |
           python prodcast-manager/release/manager_version.py "$env:RELEASE_VERSION" --verify-exe prodcast-manager/dist/ProdCast-Manager.exe
           if ($LASTEXITCODE) { throw 'Manager internal version does not match release version' }
-          Copy-Item prodcast-manager/dist/ProdCast-Manager.exe "prodcast-manager/dist/ProdCast-Manager-$env:RELEASE_VERSION.exe"
+          Move-Item -LiteralPath prodcast-manager/dist/ProdCast-Manager.exe -Destination "prodcast-manager/dist/ProdCast-Manager-$env:RELEASE_VERSION.exe"
       - uses: actions/upload-artifact@v4
         with:
           name: manager-payload

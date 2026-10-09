@@ -53,7 +53,7 @@ jobs:
         run: |
           python release/manager_version.py "$env:MANAGER_VERSION" --verify-exe dist/ProdCast-Manager.exe
           if ($LASTEXITCODE) { throw 'Manager internal version does not match requested version' }
-          Copy-Item -LiteralPath dist/ProdCast-Manager.exe -Destination "dist/ProdCast-Manager-v$env:MANAGER_VERSION.exe"
+          Move-Item -LiteralPath dist/ProdCast-Manager.exe -Destination "dist/ProdCast-Manager-v$env:MANAGER_VERSION.exe"
       - name: Record the built source
         run: |
           $commit = git rev-parse HEAD
@@ -61,7 +61,7 @@ jobs:
           $version = python -c "from prodcast_manager import __version__; print(__version__)"
           if ($LASTEXITCODE) { throw 'Could not read Manager version' }
           $files = @(Get-ChildItem -LiteralPath dist -Filter '*.exe' -File)
-          if (-not $files.Count) { throw 'No Manager executable was built' }
+          if ($files.Count -ne 1) { throw 'Expected exactly one versioned Manager executable' }
           @(
             '# Build latest Manager'
             ''
@@ -74,7 +74,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: manager-latest
-          path: prodcast-manager/dist/*.exe
+          path: prodcast-manager/dist/ProdCast-Manager-v${{ env.MANAGER_VERSION }}.exe
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
