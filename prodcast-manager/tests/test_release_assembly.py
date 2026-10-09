@@ -82,17 +82,18 @@ def snapshot(root):
     return path
 
 
-def inputs(root):
+def inputs(root, agent_prefix="ProdcastAgentSetup-"):
     return {
         "app": payload(root, "app", [f"prodcast-backend-{VERSION}-linux-amd64.tar.gz", f"prodcast-app-{VERSION}-deployment.tar.gz"]),
-        "agent": payload(root, "agent", [f"ProdCastAgent-Setup-{VERSION}.exe", "workflow-agent-sbom.cdx.json"]),
+        "agent": payload(root, "agent", [f"{agent_prefix}{VERSION}.exe", "workflow-agent-sbom.cdx.json"]),
         "worker": payload(root, "worker", [f"prodcast-worker-{VERSION}-windows-amd64.zip"]),
         "ai": payload(root, "ai", [f"prodcast-ai-{VERSION}-linux-amd64.tar.gz", f"prodcast-ai-{VERSION}-deployment.tar.gz"]),
     }
 
 
-def test_complete_uses_fresh_payloads_and_excludes_standalone_executables(tmp_path):
-    payloads = inputs(tmp_path)
+@pytest.mark.parametrize("agent_prefix", ["ProdcastAgentSetup-", "ProdCastAgent-Setup-"])
+def test_complete_uses_fresh_payloads_and_excludes_standalone_executables(tmp_path, agent_prefix):
+    payloads = inputs(tmp_path, agent_prefix)
     manager = tmp_path / "ProdCast-Manager.exe"
     manager.write_bytes(b"manager")
     assets = build(VERSION, base(tmp_path), payloads, manager, snapshot(tmp_path), tmp_path / "out")
@@ -109,6 +110,8 @@ def test_complete_uses_fresh_payloads_and_excludes_standalone_executables(tmp_pa
         assert item["source_commit"] == COMMITS[component]
         assert item["release_tag"] == VERSION
         assert item["binary_version"] == VERSION
+    assert assets["agent"].name == f"ProdcastAgentSetup-{VERSION}.exe"
+    assert assets["agent"].read_bytes() == ("agent" + agent_prefix + VERSION + ".exe").encode()
     assert assets["manager"].read_bytes() == b"manager"
     assert sha256(assets["manifest"]) in assets["manifest_checksum"].read_text()
 

@@ -54,7 +54,7 @@ After payload and checksum validation, the workflow:
 The core release assets are:
 
 - `ProdCast-vX.Y.Z-complete.zip`
-- `ProdCastAgent-Setup-vX.Y.Z.exe`
+- `ProdcastAgentSetup-vX.Y.Z.exe`
 - `ProdCast-Manager-vX.Y.Z.exe`
 - `release-manifest.json`
 - `release-manifest.json.sha256`
