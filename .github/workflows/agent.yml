@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Internal Agent version (for example 0.6.5)
+        description: Internal Agent version (vMAJOR.MINOR.PATCH, for example v0.6.5)
         required: true
         type: string
 
@@ -31,8 +31,8 @@ jobs:
         env:
           AGENT_VERSION: ${{ inputs.version }}
         run: |
-          if ($env:AGENT_VERSION -notmatch '^(\d+)\.(\d+)\.(\d+)$') {
-            throw 'Enter the internal Agent version as MAJOR.MINOR.PATCH, for example 0.6.5.'
+          if ($env:AGENT_VERSION -notmatch '^v(\d+)\.(\d+)\.(\d+)$') {
+            throw 'Enter the internal Agent version as vMAJOR.MINOR.PATCH, for example v0.6.5.'
           }
           $parts = @($Matches[1], $Matches[2], $Matches[3])
           foreach ($part in $parts) {
@@ -40,7 +40,7 @@ jobs:
           }
           $version = ($parts | ForEach-Object { [int]$_ }) -join '.'
           "PRODCAST_RELEASE_VERSION=v$version" >> $env:GITHUB_ENV
-          "AGENT_ARTIFACT_VERSION=$version" >> $env:GITHUB_ENV
+          "AGENT_ARTIFACT_VERSION=v$version" >> $env:GITHUB_ENV
       - uses: actions/create-github-app-token@v2
         if: env.PRODCAST_RELEASE_APP_ID != ''
         id: release-token

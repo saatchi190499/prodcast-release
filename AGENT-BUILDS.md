@@ -1,8 +1,8 @@
 # Agent installer builds
 
-Run **Build Prodcast Agent installer** from Actions and enter one internal version, such as `0.6.5`.
+Run **Build Prodcast Agent installer** from Actions and enter one internal version, such as `v0.6.5`, matching the complete-release version format.
 
-The workflow checks out `prodcast-agent` main, uses the same Windows build and smoke tests as **Build and assemble ProdCast release**, and uploads `Prodcast-Agent-0.6.5` for 30 days. The artifact contains only `ProdcastAgentSetup-v0.6.5.exe`. Windows displays the product as **Prodcast Agent** with version `0.6.5.0`.
+The workflow checks out `prodcast-agent` main, uses the same Windows build and smoke tests as **Build and assemble ProdCast release**, and uploads `Prodcast-Agent-v0.6.5` for 30 days. The artifact contains only `ProdcastAgentSetup-v0.6.5.exe`. Windows displays the product as **Prodcast Agent** with version `0.6.5.0`.
 
 The complete-release workflow's `agent-payload` artifact also contains only the installer EXE. Its assembly metadata travels separately in the one-day `agent-assembly-metadata` artifact and is recombined with the EXE for provenance and checksum validation.
 
